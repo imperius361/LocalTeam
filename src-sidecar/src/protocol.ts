@@ -10,7 +10,19 @@ export interface IpcResponse {
   error?: { code: number; message: string };
 }
 
-export type IpcMessage = IpcRequest | IpcResponse;
+export interface IpcNotification {
+  method: string;
+  params: Record<string, unknown>;
+}
+
+export type IpcMessage = IpcRequest | IpcResponse | IpcNotification;
+
+export function emitNotification(
+  method: string,
+  params: Record<string, unknown>,
+): void {
+  process.stdout.write(encodeMessage({ method, params }));
+}
 
 export function encodeMessage(msg: IpcMessage): string {
   return JSON.stringify(msg) + '\n';

@@ -19,6 +19,12 @@ export async function initIpc(): Promise<void> {
         } else {
           pending.resolve(response.result);
         }
+      } else if (response.method) {
+        window.dispatchEvent(
+          new CustomEvent('sidecar-notification', {
+            detail: { method: response.method, params: response.params },
+          }),
+        );
       }
     } catch {
       console.error('Failed to parse sidecar response:', event.payload);

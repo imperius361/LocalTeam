@@ -1,6 +1,7 @@
 mod credentials;
 mod sidecar;
 mod ipc;
+mod tray;
 
 use credentials::CredentialState;
 use sidecar::SidecarState;
@@ -22,6 +23,7 @@ pub fn run() {
             let app_data_dir = app.path().app_data_dir().expect("failed to get app data dir");
             app.manage(CredentialState::new(app_data_dir));
             sidecar::spawn_sidecar(&app.handle())?;
+            tray::setup_tray(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

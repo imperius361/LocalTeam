@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.localteam.app",
   "build": {
-    "beforeDevCommand": "npm run dev && cd src-sidecar && npm install",
+    "beforeDevCommand": "cd src-sidecar && npm install && cd .. && npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"

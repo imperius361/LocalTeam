@@ -24,9 +24,18 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     let is_dev = cfg!(debug_assertions);
 
     let (mut rx, child) = if is_dev {
+        // Resolve the project root (one level up from src-tauri/)
+        let project_root = std::env::current_dir()
+            .map_err(|e| format!("Failed to get cwd: {e}"))?
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap());
+        let sidecar_dir = project_root.join("src-sidecar");
+
         shell
             .command("node")
-            .args(["--import", "tsx", "src-sidecar/src/index.ts"])
+            .args(["--import", "tsx", "src/index.ts"])
+            .current_dir(sidecar_dir)
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar (dev): {e}"))?
     } else {

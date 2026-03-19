@@ -65,7 +65,8 @@ The brain of LocalTeam. Runs as a separate Node.js process managed by Tauri's si
 - Task decomposition and assignment
 - Inter-agent communication bus (message routing between agents)
 - File access coordination (advisory locking, optional git worktree sandboxing)
-- Exposes a local API (WebSocket + JSON-RPC) consumed by both the Tauri shell and the webview
+- Exposes a WebSocket + JSON-RPC API consumed by the frontend for real-time streaming
+- Communicates with the Rust shell via local named pipe for secure IPC (credential requests, file system operations)
 
 #### Layer 3: Frontend (React + TypeScript)
 
@@ -250,7 +251,7 @@ Stored within the project directory:
 ### Build & Release
 
 - Tauri v2's built-in bundler produces `.msi` / `.exe` installer for Windows
-- The TypeScript sidecar is bundled as a compiled Node.js binary (using `pkg` or `node --sea`) — no separate Node.js install required for end users
+- The TypeScript sidecar is bundled as a compiled Node.js Single Executable Application (SEA) — no separate Node.js install required for end users
 - Total bundle size target: ~30-50MB (Tauri shell + bundled sidecar + frontend assets)
 - GitHub Releases for distribution, with Tauri's built-in auto-updater and code signing
 

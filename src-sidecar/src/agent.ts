@@ -22,13 +22,19 @@ export class Agent {
     this.history.push({ role: 'user', content: input });
 
     let fullResponse = '';
-    for await (const token of this.provider.sendMessage({
-      messages: [...this.history],
-      systemPrompt: this.systemPrompt,
-      model: this.model,
-    })) {
-      fullResponse += token;
-      yield token;
+    try {
+      for await (const token of this.provider.sendMessage({
+        messages: [...this.history],
+        systemPrompt: this.systemPrompt,
+        model: this.model,
+      })) {
+        fullResponse += token;
+        yield token;
+      }
+    } catch (error) {
+      // Roll back the user message if the provider fails
+      this.history.pop();
+      throw error;
     }
 
     this.history.push({ role: 'assistant', content: fullResponse });

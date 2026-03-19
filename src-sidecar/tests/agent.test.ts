@@ -73,4 +73,24 @@ describe('Agent', () => {
     agent.reset();
     expect(agent.getHistory()).toHaveLength(0);
   });
+
+  it('rolls back user message on provider error', async () => {
+    // Create a provider that throws
+    const errorProvider = {
+      id: 'error',
+      name: 'Error',
+      async *sendMessage() {
+        throw new Error('API failure');
+      },
+    };
+    const agent = new Agent(testConfig, errorProvider as any);
+
+    try {
+      for await (const _ of agent.respond('Hello')) { /* drain */ }
+    } catch {
+      // Expected
+    }
+
+    expect(agent.getHistory()).toHaveLength(0);
+  });
 });

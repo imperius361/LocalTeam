@@ -19,14 +19,16 @@ export function createHandlers(
           id: req.id,
           result: { uptime: Date.now() - startTime, version: '0.1.0' },
         };
-      case 'create_task':
-        return {
-          id: req.id,
-          result: taskManager.create(
-            req.params.title as string,
-            req.params.description as string,
-          ),
-        };
+      case 'create_task': {
+        const { title, description } = req.params;
+        if (typeof title !== 'string' || !title) {
+          return { id: req.id, error: { code: -3, message: 'Missing required param: title' } };
+        }
+        if (typeof description !== 'string') {
+          return { id: req.id, error: { code: -3, message: 'Missing required param: description' } };
+        }
+        return { id: req.id, result: taskManager.create(title, description) };
+      }
       case 'list_tasks':
         return {
           id: req.id,

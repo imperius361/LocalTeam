@@ -1,3 +1,8 @@
+mod sidecar;
+mod ipc;
+
+use sidecar::SidecarState;
+
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -8,7 +13,16 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_shell::init())
+        .manage(SidecarState::new())
+        .setup(|app| {
+            sidecar::spawn_sidecar(&app.handle())?;
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            ipc::send_to_sidecar,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

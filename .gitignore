@@ -1,2 +1,7 @@
-.worktrees/
+node_modules/
+target/
+dist/
 .superpowers/
+.localteam/
+.worktrees/
+*.exe

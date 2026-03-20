@@ -1,18 +1,12 @@
-use tauri::State;
-use crate::sidecar::SidecarState;
+use crate::sidecar;
+use tauri::AppHandle;
 
 #[tauri::command]
-pub async fn send_to_sidecar(
-    state: State<'_, SidecarState>,
-    message: String,
-) -> Result<(), String> {
-    let mut child_lock = state.child.lock().unwrap();
-    if let Some(ref mut child) = *child_lock {
-        child
-            .write((message + "\n").as_bytes())
-            .map_err(|e| format!("Failed to write to sidecar: {e}"))?;
-        Ok(())
-    } else {
-        Err("Sidecar not running".into())
-    }
+pub async fn send_to_sidecar(app: AppHandle, message: String) -> Result<(), String> {
+    sidecar::write_to_sidecar(&app, &message)
+}
+
+#[tauri::command]
+pub async fn restart_sidecar(app: AppHandle) -> Result<(), String> {
+    sidecar::spawn_sidecar(&app)
 }

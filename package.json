@@ -3,17 +3,24 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:sidecar:windows": "node scripts/build-sidecar-windows.mjs",
+    "build:windows": "npm run build:sidecar:windows && npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows-cross.conf.json",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test": "npm run test:sidecar && npm run test:e2e",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:sidecar": "cd src-sidecar && npx vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-stronghold": "^2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

@@ -1,8 +1,8 @@
 use std::sync::Mutex;
 use tauri::Emitter;
 use tauri::Manager;
-use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
+use tauri_plugin_shell::ShellExt;
 
 pub struct SidecarState {
     pub child: Mutex<Option<CommandChild>>,
@@ -17,14 +17,12 @@ impl SidecarState {
 }
 
 pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
-    let shell = app.shell();
+    stop_sidecar(app);
 
-    // In dev mode, run the sidecar via tsx directly.
-    // In production, use the bundled SEA binary via sidecar().
+    let shell = app.shell();
     let is_dev = cfg!(debug_assertions);
 
     let (mut rx, child) = if is_dev {
-        // Resolve the project root (one level up from src-tauri/)
         let project_root = std::env::current_dir()
             .map_err(|e| format!("Failed to get cwd: {e}"))?
             .parent()
@@ -46,22 +44,23 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?
     };
 
-    // Store the child process handle
     let state = app.state::<SidecarState>();
     *state.child.lock().unwrap() = Some(child);
 
-    // Spawn a task to read sidecar output
     let app_handle = app.clone();
     tauri::async_runtime::spawn(async move {
         while let Some(event) = rx.recv().await {
             match event {
                 CommandEvent::Stdout(line) => {
-                    // Forward sidecar responses to the frontend
                     let line_str = String::from_utf8_lossy(&line).to_string();
                     let _ = app_handle.emit("sidecar-stdout", &line_str);
                 }
                 CommandEvent::Stderr(line) => {
-                    eprintln!("[sidecar stderr] {}", String::from_utf8_lossy(&line));
+                    let message = String::from_utf8_lossy(&line).to_string();
+                    eprintln!("[sidecar stderr] {message}");
+                    if message.contains("started") {
+                        let _ = app_handle.emit("sidecar-started", message);
+                    }
                 }
                 CommandEvent::Terminated(status) => {
                     eprintln!("[sidecar] terminated with status: {:?}", status);
@@ -74,4 +73,29 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     });
 
     Ok(())
+}
+
+pub fn stop_sidecar(app: &tauri::AppHandle) {
+    let state = app.state::<SidecarState>();
+    let child = {
+        let mut child_lock = state.child.lock().unwrap();
+        child_lock.take()
+    };
+
+    if let Some(child) = child {
+        let _ = child.kill();
+    }
+}
+
+pub fn write_to_sidecar(app: &tauri::AppHandle, message: &str) -> Result<(), String> {
+    let state = app.state::<SidecarState>();
+    let mut child_lock = state.child.lock().unwrap();
+    if let Some(ref mut child) = *child_lock {
+        child
+            .write((message.to_string() + "\n").as_bytes())
+            .map_err(|e| format!("Failed to write to sidecar: {e}"))?;
+        Ok(())
+    } else {
+        Err("Sidecar not running".into())
+    }
 }

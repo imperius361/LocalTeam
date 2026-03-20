@@ -23,6 +23,7 @@ export class Orchestrator {
   async *runRound(
     taskId: string,
     prompt: string,
+    round = 1,
   ): AsyncGenerator<AgentMessage> {
     for (const [, agent] of this.agents) {
       let content = '';
@@ -34,14 +35,34 @@ export class Orchestrator {
         id: randomUUID(),
         agentId: agent.id,
         agentRole: agent.role,
-        type: 'discussion',
+        type: classifyAgentMessage(content),
         content,
         timestamp: Date.now(),
         taskId,
+        round,
+        tokenEstimate: estimateTokens(content),
       };
 
       this.messageBus.emit(message);
       yield message;
     }
   }
+}
+
+function classifyAgentMessage(content: string): AgentMessage['type'] {
+  const normalized = content.trimStart().toUpperCase();
+  if (normalized.startsWith('AGREE')) {
+    return 'consensus';
+  }
+  if (normalized.startsWith('OBJECTION')) {
+    return 'objection';
+  }
+  if (normalized.startsWith('PROPOSAL')) {
+    return 'proposal';
+  }
+  return 'discussion';
+}
+
+function estimateTokens(content: string): number {
+  return Math.max(1, Math.ceil(content.length / 4));
 }

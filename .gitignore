@@ -5,3 +5,5 @@ dist/
 .localteam/
 .worktrees/
 *.exe
+
+src-tauri/binaries/

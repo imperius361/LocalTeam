@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { handleRequest, createHandlers } from '../src/handlers';
-import { MessageBus } from '../src/message-bus';
-import { Orchestrator } from '../src/orchestrator';
-import { TaskManager } from '../src/task-manager';
+import type { LocalTeamRuntime } from '../src/runtime';
 
 describe('Request Handlers', () => {
   it('responds to ping with pong', () => {
@@ -30,43 +28,50 @@ describe('Request Handlers', () => {
   });
 });
 
-describe('Orchestrator Handlers', () => {
+describe('Runtime Handlers', () => {
   function setup() {
-    const bus = new MessageBus();
-    const orchestrator = new Orchestrator(bus);
-    const taskManager = new TaskManager();
-    const handle = createHandlers(orchestrator, taskManager);
-    return { handle, orchestrator, taskManager, bus };
+    const runtime = {
+      status: async () => ({ agentStatuses: [], tasks: [] }),
+      loadProject: async () => ({ projectRoot: '/tmp/project' }),
+      saveProject: async () => ({ ok: true }),
+      listTemplates: async () => [{ id: 'default' }],
+      getTemplate: async () => ({ team: { name: 'Default', agents: [] } }),
+      syncCredentials: async () => [{ provider: 'openai', hasKey: true }],
+      startSession: async () => ({ session: { id: 'session-1' } }),
+      createTask: async (title: string) => ({
+        tasks: [{ id: 'task-1', title, status: 'pending' }],
+      }),
+      listTasks: async () => [{ id: 'task-1' }],
+      listMessages: async () => [{ id: 'msg-1' }],
+      resolveConsensus: async () => ({ consensus: [] }),
+    } as unknown as LocalTeamRuntime;
+
+    return createHandlers(runtime);
   }
 
-  it('handles create_task', () => {
-    const { handle } = setup();
-    const res = handle({
+  it('handles v1.task.create', async () => {
+    const handle = setup();
+    const res = await handle({
       id: '1',
-      method: 'create_task',
+      method: 'v1.task.create',
       params: { title: 'Build auth', description: 'OAuth2 login' },
     });
 
     expect(res.error).toBeUndefined();
-    expect(res.result).toHaveProperty('id');
-    expect((res.result as any).title).toBe('Build auth');
-    expect((res.result as any).status).toBe('pending');
+    expect((res.result as any).tasks[0].title).toBe('Build auth');
   });
 
-  it('handles list_tasks', () => {
-    const { handle, taskManager } = setup();
-    taskManager.create('Task A', 'Desc A');
-    taskManager.create('Task B', 'Desc B');
-
-    const res = handle({ id: '1', method: 'list_tasks', params: {} });
+  it('handles v1.task.list', async () => {
+    const handle = setup();
+    const res = await handle({ id: '1', method: 'v1.task.list', params: {} });
 
     expect(res.error).toBeUndefined();
-    expect((res.result as any[])).toHaveLength(2);
+    expect((res.result as any[])).toHaveLength(1);
   });
 
-  it('handles get_agents with empty orchestrator', () => {
-    const { handle } = setup();
-    const res = handle({ id: '1', method: 'get_agents', params: {} });
+  it('handles get_agents via runtime snapshot', async () => {
+    const handle = setup();
+    const res = await handle({ id: '1', method: 'get_agents', params: {} });
 
     expect(res.error).toBeUndefined();
     expect(res.result).toEqual([]);

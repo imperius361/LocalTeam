@@ -1,33 +1,42 @@
 import { describe, it, expect } from 'vitest';
 import { parseTeamConfig, validateTeamConfig } from '../src/team-config';
-import type { TeamConfig } from '../src/types';
+import type { ProjectConfig } from '../src/types';
 
-const validConfig: TeamConfig = {
-  name: 'Test Team',
-  agents: [
-    {
-      id: 'architect',
-      role: 'Software Architect',
-      model: 'claude-opus-4-20250514',
-      provider: 'anthropic',
-      systemPrompt: 'You are a senior software architect.',
-    },
-    {
-      id: 'engineer',
-      role: 'Engineer',
-      model: 'gpt-4o',
-      provider: 'openai',
-      systemPrompt: 'You are a senior software engineer.',
-    },
-  ],
+const validConfig: ProjectConfig = {
+  team: {
+    name: 'Test Team',
+    agents: [
+      {
+        id: 'architect',
+        role: 'Software Architect',
+        model: 'claude-opus-4-20250514',
+        provider: 'anthropic',
+        systemPrompt: 'You are a senior software architect.',
+      },
+      {
+        id: 'engineer',
+        role: 'Engineer',
+        model: 'gpt-4o',
+        provider: 'openai',
+        systemPrompt: 'You are a senior software engineer.',
+      },
+    ],
+  },
   consensus: {
     maxRounds: 3,
     requiredMajority: 0.66,
   },
+  sandbox: {
+    defaultMode: 'direct',
+    useWorktrees: true,
+  },
+  fileAccess: {
+    denyList: ['.env'],
+  },
 };
 
 describe('parseTeamConfig', () => {
-  it('parses valid JSON into a TeamConfig', () => {
+  it('parses valid JSON into a ProjectConfig', () => {
     const json = JSON.stringify(validConfig);
     const result = parseTeamConfig(json);
     expect(result).toEqual(validConfig);
@@ -45,42 +54,48 @@ describe('validateTeamConfig', () => {
   });
 
   it('rejects config with no agents', () => {
-    const config = { ...validConfig, agents: [] };
+    const config = { ...validConfig, team: { ...validConfig.team, agents: [] } };
     const errors = validateTeamConfig(config);
     expect(errors).toContain('Team must have at least one agent');
   });
 
   it('rejects config with missing team name', () => {
-    const config = { ...validConfig, name: '' };
+    const config = { ...validConfig, team: { ...validConfig.team, name: '' } };
     const errors = validateTeamConfig(config);
     expect(errors).toContain('Team name is required');
   });
 
   it('rejects agents with duplicate ids', () => {
-    const config: TeamConfig = {
+    const config: ProjectConfig = {
       ...validConfig,
-      agents: [
-        { ...validConfig.agents[0], id: 'same' },
-        { ...validConfig.agents[1], id: 'same' },
-      ],
+      team: {
+        ...validConfig.team,
+        agents: [
+          { ...validConfig.team.agents[0], id: 'same' },
+          { ...validConfig.team.agents[1], id: 'same' },
+        ],
+      },
     };
     const errors = validateTeamConfig(config);
     expect(errors).toContain('Duplicate agent id: same');
   });
 
   it('rejects agents with unsupported provider', () => {
-    const config: TeamConfig = {
+    const config: ProjectConfig = {
       ...validConfig,
-      agents: [
-        { ...validConfig.agents[0], provider: 'unsupported' as any },
-      ],
+      team: {
+        ...validConfig.team,
+        agents: [
+          { ...validConfig.team.agents[0], provider: 'unsupported' as any },
+        ],
+      },
     };
     const errors = validateTeamConfig(config);
     expect(errors[0]).toContain('Unsupported provider');
   });
 
   it('rejects invalid consensus config', () => {
-    const config: TeamConfig = {
+    const config: ProjectConfig = {
       ...validConfig,
       consensus: { maxRounds: 0, requiredMajority: 1.5 },
     };
@@ -89,11 +104,14 @@ describe('validateTeamConfig', () => {
   });
 
   it('rejects agents missing required fields', () => {
-    const config: TeamConfig = {
+    const config: ProjectConfig = {
       ...validConfig,
-      agents: [
-        { id: '', role: '', model: '', provider: 'anthropic', systemPrompt: '' },
-      ],
+      team: {
+        ...validConfig.team,
+        agents: [
+          { id: '', role: '', model: '', provider: 'anthropic', systemPrompt: '' },
+        ],
+      },
     };
     const errors = validateTeamConfig(config);
     expect(errors.length).toBeGreaterThan(0);

@@ -1,8 +1,3 @@
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
 export type ProviderId = 'anthropic' | 'openai' | 'mock';
 
 export interface AgentConfig {
@@ -16,20 +11,36 @@ export interface AgentConfig {
   canExecuteCommands?: boolean;
 }
 
-export type AgentMessageType =
-  | 'discussion'
-  | 'proposal'
-  | 'objection'
-  | 'consensus'
-  | 'artifact'
-  | 'user'
-  | 'system';
+export interface ProjectConfig {
+  team: {
+    name: string;
+    agents: AgentConfig[];
+  };
+  consensus: {
+    maxRounds: number;
+    requiredMajority: number;
+  };
+  sandbox: {
+    defaultMode: 'direct' | 'worktree';
+    useWorktrees: boolean;
+  };
+  fileAccess: {
+    denyList: string[];
+  };
+}
 
 export interface AgentMessage {
   id: string;
   agentId: string;
   agentRole: string;
-  type: AgentMessageType;
+  type:
+    | 'discussion'
+    | 'proposal'
+    | 'objection'
+    | 'consensus'
+    | 'artifact'
+    | 'user'
+    | 'system';
   content: string;
   timestamp: number;
   taskId?: string;
@@ -38,13 +49,11 @@ export interface AgentMessage {
   meta?: Record<string, unknown>;
 }
 
-export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed';
-
 export interface Task {
   id: string;
   title: string;
   description: string;
-  status: TaskStatus;
+  status: 'pending' | 'in_progress' | 'review' | 'completed';
   assignedAgents: string[];
   parentTaskId?: string;
   createdAt: number;
@@ -56,47 +65,17 @@ export interface Task {
   sandboxDiffStat?: string;
 }
 
-export interface ConsensusConfig {
-  maxRounds: number;
-  requiredMajority: number;
-}
-
-export interface TeamDefinition {
-  name: string;
-  agents: AgentConfig[];
-}
-
-export interface SandboxConfig {
-  defaultMode: 'direct' | 'worktree';
-  useWorktrees: boolean;
-}
-
-export interface FileAccessConfig {
-  denyList: string[];
-}
-
-export interface ProjectConfig {
-  team: TeamDefinition;
-  consensus: ConsensusConfig;
-  sandbox: SandboxConfig;
-  fileAccess: FileAccessConfig;
-}
-
-export type TeamConfig = TeamDefinition;
-
-export type AgentRuntimeState =
-  | 'idle'
-  | 'thinking'
-  | 'writing'
-  | 'waiting_for_consensus'
-  | 'unavailable';
-
 export interface AgentStatus {
   agentId: string;
   role: string;
   model: string;
   provider: ProviderId;
-  status: AgentRuntimeState;
+  status:
+    | 'idle'
+    | 'thinking'
+    | 'writing'
+    | 'waiting_for_consensus'
+    | 'unavailable';
   hasCredentials: boolean;
   lastError?: string;
 }
@@ -126,7 +105,7 @@ export interface SessionState {
 }
 
 export interface ProviderCredentialStatus {
-  provider: Exclude<ProviderId, 'mock'>;
+  provider: 'anthropic' | 'openai';
   hasKey: boolean;
   syncedAt?: number;
 }
@@ -156,4 +135,9 @@ export interface ProjectSnapshot {
     uptime: number;
     lastError?: string;
   };
+}
+
+export interface SidecarNotification {
+  method: string;
+  params: Record<string, unknown>;
 }

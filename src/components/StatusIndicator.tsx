@@ -1,40 +1,32 @@
-import { useState, useEffect } from 'react';
-import { callSidecar } from '../lib/ipc';
+import type { ProjectSnapshot } from '../lib/contracts';
 
-interface SidecarStatus {
-  uptime: number;
-  version: string;
+interface StatusIndicatorProps {
+  snapshot: ProjectSnapshot | null;
+  connectionError: string | null;
 }
 
-export function StatusIndicator() {
-  const [status, setStatus] = useState<SidecarStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const checkStatus = async () => {
-      try {
-        const result = await callSidecar<SidecarStatus>('status');
-        setStatus(result);
-        setError(null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Connection failed');
-        setStatus(null);
-      }
-    };
-
-    checkStatus();
-    const interval = setInterval(checkStatus, 5000);
-    return () => clearInterval(interval);
-  }, []);
+export function StatusIndicator({
+  snapshot,
+  connectionError,
+}: StatusIndicatorProps) {
+  const ready = snapshot?.sidecar.ready && !connectionError;
+  const uptime = snapshot ? Math.round(snapshot.sidecar.uptime / 1000) : 0;
 
   return (
     <div className="status-indicator">
-      <div className={`status-dot ${status ? 'connected' : 'disconnected'}`} />
-      <span className="status-text">
-        {status
-          ? `Sidecar v${status.version} — up ${Math.round(status.uptime / 1000)}s`
-          : error ?? 'Connecting...'}
-      </span>
+      <div className={`status-dot ${ready ? 'connected' : 'disconnected'}`} />
+      <div className="status-content">
+        <span className="status-text">
+          {ready
+            ? `Sidecar v${snapshot?.sidecar.version} online`
+            : connectionError ?? 'Waiting for sidecar'}
+        </span>
+        <span className="status-subtext">
+          {snapshot?.session
+            ? `Session ${snapshot.session.status} • up ${uptime}s`
+            : `No active session • up ${uptime}s`}
+        </span>
+      </div>
     </div>
   );
 }

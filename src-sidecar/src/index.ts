@@ -1,26 +1,24 @@
 import { createInterface } from 'node:readline';
 import {
-  encodeMessage,
   decodeMessage,
+  emitNotification,
+  encodeMessage,
   type IpcRequest,
   type IpcResponse,
 } from './protocol.js';
 import { createHandlers } from './handlers.js';
-import { MessageBus } from './message-bus.js';
-import { Orchestrator } from './orchestrator.js';
-import { TaskManager } from './task-manager.js';
+import { LocalTeamRuntime } from './runtime.js';
 
-const messageBus = new MessageBus();
-const orchestrator = new Orchestrator(messageBus);
-const taskManager = new TaskManager();
-const handleRequest = createHandlers(orchestrator, taskManager);
-
+const runtime = new LocalTeamRuntime((notification) => {
+  emitNotification(notification.method, notification.params);
+});
+const handleRequest = createHandlers(runtime);
 const rl = createInterface({ input: process.stdin });
 
-rl.on('line', (line) => {
+rl.on('line', async (line: string) => {
   try {
     const req = decodeMessage(line) as IpcRequest;
-    const res = handleRequest(req);
+    const res = await handleRequest(req);
     process.stdout.write(encodeMessage(res));
   } catch (err) {
     const errorRes: IpcResponse = {

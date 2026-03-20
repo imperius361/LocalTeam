@@ -1,18 +1,18 @@
-export interface IpcRequest {
+export interface IpcRequest<T = Record<string, unknown>> {
   id: string;
   method: string;
-  params: Record<string, unknown>;
+  params: T;
 }
 
-export interface IpcResponse {
+export interface IpcResponse<T = unknown> {
   id: string;
-  result?: unknown;
+  result?: T;
   error?: { code: number; message: string };
 }
 
-export interface IpcNotification {
+export interface IpcNotification<T = Record<string, unknown>> {
   method: string;
-  params: Record<string, unknown>;
+  params: T;
 }
 
 export type IpcMessage = IpcRequest | IpcResponse | IpcNotification;
@@ -22,6 +22,10 @@ export function emitNotification(
   params: Record<string, unknown>,
 ): void {
   process.stdout.write(encodeMessage({ method, params }));
+}
+
+export function isNotification(message: IpcMessage): message is IpcNotification {
+  return !('id' in message);
 }
 
 export function encodeMessage(msg: IpcMessage): string {

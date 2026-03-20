@@ -5,6 +5,10 @@ export class MessageBus {
   private emitter = new EventEmitter();
   private history: AgentMessage[] = [];
 
+  hydrate(history: AgentMessage[]): void {
+    this.history = history.map((message) => ({ ...message }));
+  }
+
   emit(message: AgentMessage): void {
     this.history.push(message);
     this.emitter.emit('message', message);

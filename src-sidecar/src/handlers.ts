@@ -1,14 +1,12 @@
 import type { IpcRequest, IpcResponse } from './protocol.js';
-import type { Orchestrator } from './orchestrator.js';
-import type { TaskManager } from './task-manager.js';
+import type { LocalTeamRuntime } from './runtime.js';
 
 const startTime = Date.now();
 
 export function createHandlers(
-  orchestrator: Orchestrator,
-  taskManager: TaskManager,
-): (req: IpcRequest) => IpcResponse {
-  return (req: IpcRequest): IpcResponse => {
+  runtime: LocalTeamRuntime,
+): (req: IpcRequest) => Promise<IpcResponse> {
+  return async (req: IpcRequest): Promise<IpcResponse> => {
     switch (req.method) {
       case 'ping':
         return { id: req.id, result: { status: 'pong' } };
@@ -17,31 +15,88 @@ export function createHandlers(
       case 'status':
         return {
           id: req.id,
-          result: { uptime: Date.now() - startTime, version: '0.1.0' },
+          result: { uptime: Date.now() - startTime, version: '0.2.0' },
         };
-      case 'create_task': {
-        const { title, description } = req.params;
-        if (typeof title !== 'string' || !title) {
-          return { id: req.id, error: { code: -3, message: 'Missing required param: title' } };
-        }
-        if (typeof description !== 'string') {
-          return { id: req.id, error: { code: -3, message: 'Missing required param: description' } };
-        }
-        return { id: req.id, result: taskManager.create(title, description) };
-      }
-      case 'list_tasks':
+      case 'v1.status':
+        return { id: req.id, result: await runtime.status() };
+      case 'v1.project.load':
         return {
           id: req.id,
-          result: taskManager.list(req.params.status as any),
+          result: await runtime.loadProject(
+            typeof req.params.rootPath === 'string'
+              ? req.params.rootPath
+              : process.cwd(),
+          ),
+        };
+      case 'v1.project.save':
+        return {
+          id: req.id,
+          result: await runtime.saveProject(req.params.config as any),
+        };
+      case 'v1.templates.list':
+        return { id: req.id, result: await runtime.listTemplates() };
+      case 'v1.templates.get':
+        return { id: req.id, result: await runtime.getTemplate(String(req.params.id)) };
+      case 'v1.credentials.sync':
+        return {
+          id: req.id,
+          result: await runtime.syncCredentials((req.params.values ?? {}) as any),
+        };
+      case 'v1.session.start':
+        return { id: req.id, result: await runtime.startSession() };
+      case 'v1.session.snapshot':
+        return { id: req.id, result: await runtime.status() };
+      case 'create_task':
+      case 'v1.task.create': {
+        const { title, description } = req.params;
+        if (typeof title !== 'string' || !title) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: title' },
+          };
+        }
+        if (typeof description !== 'string') {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: description' },
+          };
+        }
+        return {
+          id: req.id,
+          result: await runtime.createTask(
+            title,
+            description,
+            typeof req.params.parentTaskId === 'string'
+              ? req.params.parentTaskId
+              : undefined,
+          ),
+        };
+      }
+      case 'list_tasks':
+      case 'v1.task.list':
+        return { id: req.id, result: await runtime.listTasks() };
+      case 'v1.messages.list':
+        return {
+          id: req.id,
+          result: await runtime.listMessages(
+            typeof req.params.taskId === 'string' ? req.params.taskId : undefined,
+          ),
+        };
+      case 'v1.consensus.resolve':
+        return {
+          id: req.id,
+          result: await runtime.resolveConsensus(
+            String(req.params.taskId),
+            req.params.action as 'continue' | 'override' | 'approve_majority',
+            typeof req.params.overrideMessage === 'string'
+              ? req.params.overrideMessage
+              : undefined,
+          ),
         };
       case 'get_agents':
         return {
           id: req.id,
-          result: orchestrator.getAgents().map((a) => ({
-            id: a.id,
-            role: a.role,
-            model: a.model,
-          })),
+          result: (await runtime.status()).agentStatuses,
         };
       default:
         return {
@@ -52,7 +107,6 @@ export function createHandlers(
   };
 }
 
-// Backward compatibility for existing tests
 export function handleRequest(req: IpcRequest): IpcResponse {
   switch (req.method) {
     case 'ping':
@@ -62,7 +116,7 @@ export function handleRequest(req: IpcRequest): IpcResponse {
     case 'status':
       return {
         id: req.id,
-        result: { uptime: Date.now() - startTime, version: '0.1.0' },
+        result: { uptime: Date.now() - startTime, version: '0.2.0' },
       };
     default:
       return {

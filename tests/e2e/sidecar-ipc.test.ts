@@ -3,15 +3,19 @@ import { spawn } from 'node:child_process';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const sidecarDir = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../src-sidecar',
+);
+
 function spawnSidecar(): Promise<{
   send: (msg: object) => void;
   receive: () => Promise<object>;
   kill: () => void;
 }> {
   return new Promise((resolveReady) => {
-    const child = spawn('npx', ['tsx', 'src/index.ts'], {
-      cwd: resolve(dirname(fileURLToPath(import.meta.url)), '../../src-sidecar'),
-      shell: true,
+    const child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
+      cwd: sidecarDir,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 

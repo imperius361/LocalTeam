@@ -1,4 +1,4 @@
-import { appDataDir } from '@tauri-apps/api/path';
+import { appDataDir, join } from '@tauri-apps/api/path';
 import { Stronghold } from '@tauri-apps/plugin-stronghold';
 
 const CLIENT_NAME = 'localteam';
@@ -15,7 +15,7 @@ let strongholdInstance: Stronghold | null = null;
 let storeInstance: StoreLike | null = null;
 
 async function getVaultPath(): Promise<string> {
-  return `${await appDataDir()}localteam-vault.hold`;
+  return join(await appDataDir(), 'localteam-vault.hold');
 }
 
 async function getStore(password: string): Promise<StoreLike> {
@@ -77,12 +77,16 @@ async function writeValue(
   key: string,
   value: string | undefined,
 ): Promise<void> {
-  if (value && value.trim()) {
-    await store.insert(key, Array.from(new TextEncoder().encode(value.trim())));
+  const nextValue = value?.trim();
+  if (nextValue) {
+    await store.insert(key, Array.from(new TextEncoder().encode(nextValue)));
     return;
   }
 
-  await store.remove(key);
+  const existing = await store.get(key);
+  if (existing) {
+    await store.remove(key);
+  }
 }
 
 async function readValue(store: StoreLike, key: string): Promise<string | undefined> {

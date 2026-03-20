@@ -3,6 +3,7 @@ target/
 dist/
 .superpowers/
 .localteam/
+.localteam-build/
 .worktrees/
 *.exe
 

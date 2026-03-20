@@ -6,6 +6,8 @@
     "core:default",
     "opener:default",
     "stronghold:default",
+    "stronghold:allow-destroy",
+    "stronghold:allow-remove-store-record",
     "shell:allow-spawn",
     "shell:allow-stdin-write",
     "shell:allow-execute"

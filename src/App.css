@@ -20,12 +20,17 @@
 body {
   margin: 0;
   min-height: 100vh;
+  overflow-y: auto;
   background:
     radial-gradient(circle at top left, rgba(126, 224, 195, 0.18), transparent 24%),
     radial-gradient(circle at top right, rgba(255, 209, 110, 0.12), transparent 28%),
     linear-gradient(160deg, var(--bg-0), var(--bg-1) 38%, var(--bg-2));
   color: var(--text);
   font-family: "Bahnschrift", "Segoe UI Variable Text", sans-serif;
+}
+
+#root {
+  min-height: 100vh;
 }
 
 button,

@@ -11,6 +11,7 @@ import { CredentialsSummaryPanel } from '../../src/components/CredentialsSummary
 import { ProjectSettingsPanel } from '../../src/components/ProjectSettingsPanel';
 import type { ProjectConfig } from '../../src/lib/contracts';
 import { resolveWorkspaceConfigPath } from '../../src-sidecar/src/persistence';
+import { canonicalizeWorkspacePath } from '../../src-sidecar/src/workspace-path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sidecarDir = join(__dirname, '..', '..', 'src-sidecar');
@@ -26,7 +27,21 @@ async function createGitWorkspace(prefix: string): Promise<string> {
     throw new Error(`git init failed for ${root}`);
   }
 
-  return root;
+  const topLevelResult = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+
+  if (topLevelResult.status !== 0) {
+    throw new Error(`git rev-parse failed for ${root}`);
+  }
+
+  const topLevel = topLevelResult.stdout.trim();
+  if (!topLevel) {
+    throw new Error(`git rev-parse returned an empty workspace root for ${root}`);
+  }
+
+  return canonicalizeWorkspacePath(topLevel);
 }
 
 function makeProjectConfig(teamName: string): ProjectConfig {

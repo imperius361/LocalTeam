@@ -9,6 +9,7 @@ export interface AgentConfig {
   tools?: string[];
   allowedPaths?: string[];
   canExecuteCommands?: boolean;
+  preApprovedCommands?: string[];
 }
 
 export interface ProjectConfig {
@@ -118,6 +119,59 @@ export interface TemplateSummary {
   providers: ProviderId[];
 }
 
+export interface MessageStreamDelta {
+  messageId: string;
+  taskId: string;
+  agentId: string;
+  agentRole: string;
+  round: number;
+  delta: string;
+  content: string;
+  timestamp: number;
+}
+
+export interface MessageStreamFinalization {
+  messageId: string;
+  taskId: string;
+  agentId: string;
+  round: number;
+  timestamp: number;
+}
+
+export type CommandApprovalStatus =
+  | 'pending'
+  | 'approved'
+  | 'denied'
+  | 'completed'
+  | 'failed';
+
+export interface CommandApproval {
+  id: string;
+  taskId: string;
+  agentId: string;
+  agentRole: string;
+  command: string;
+  requestedCwd?: string;
+  effectiveCwd: string;
+  status: CommandApprovalStatus;
+  requiresApproval: boolean;
+  preApproved: boolean;
+  reason?: string;
+  requestedAt: number;
+  updatedAt: number;
+  decidedAt?: number;
+  completedAt?: number;
+  exitCode?: number;
+  stdout?: string;
+  stderr?: string;
+  policy: {
+    sandboxMode: ProjectConfig['sandbox']['defaultMode'];
+    checkedPaths: string[];
+    allowedPaths: string[];
+    matchedDenyRule?: string;
+  };
+}
+
 export interface ProjectSnapshot {
   version: 'v1';
   projectRoot: string | null;
@@ -129,6 +183,7 @@ export interface ProjectSnapshot {
   agentStatuses: AgentStatus[];
   credentials: ProviderCredentialStatus[];
   templates: TemplateSummary[];
+  commandApprovals: CommandApproval[];
   sidecar: {
     ready: boolean;
     version: string;

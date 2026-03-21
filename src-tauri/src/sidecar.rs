@@ -1,3 +1,4 @@
+use std::fs::create_dir_all;
 use std::sync::Mutex;
 use tauri::Emitter;
 use tauri::Manager;
@@ -21,6 +22,12 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 
     let shell = app.shell();
     let is_dev = cfg!(debug_assertions);
+    let app_data_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| format!("Failed to resolve app data directory: {e}"))?;
+    create_dir_all(&app_data_dir)
+        .map_err(|e| format!("Failed to prepare app data directory: {e}"))?;
 
     let (mut rx, child) = if is_dev {
         let project_root = std::env::current_dir()
@@ -34,12 +41,22 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
             .command("node")
             .args(["--import", "tsx", "src/index.ts"])
             .current_dir(sidecar_dir)
+            .env("LOCALTEAM_APP_DATA_DIR", &app_data_dir)
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar (dev): {e}"))?
     } else {
+        let templates_dir = app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("Failed to resolve app resource directory: {e}"))?
+            .join("templates");
+
         shell
             .sidecar("localteam-sidecar")
             .map_err(|e| format!("Failed to create sidecar command: {e}"))?
+            .current_dir(&app_data_dir)
+            .env("LOCALTEAM_APP_DATA_DIR", &app_data_dir)
+            .env("LOCALTEAM_TEMPLATES_DIR", templates_dir)
             .spawn()
             .map_err(|e| format!("Failed to spawn sidecar: {e}"))?
     };

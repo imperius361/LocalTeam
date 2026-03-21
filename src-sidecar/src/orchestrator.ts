@@ -3,6 +3,39 @@ import type { Agent } from './agent.js';
 import type { MessageBus } from './message-bus.js';
 import type { AgentMessage } from './types.js';
 
+export interface StreamDeltaEvent {
+  messageId: string;
+  taskId: string;
+  agentId: string;
+  agentRole: string;
+  round: number;
+  delta: string;
+  content: string;
+  timestamp: number;
+}
+
+export interface MessageFinalizedEvent {
+  message: AgentMessage;
+}
+
+export interface MessageErrorEvent {
+  messageId: string;
+  taskId: string;
+  agentId: string;
+  agentRole: string;
+  round: number;
+  content: string;
+  timestamp: number;
+  error: unknown;
+}
+
+export interface RunRoundOptions {
+  agentIds?: string[];
+  onStreamDelta?: (event: StreamDeltaEvent) => Promise<void> | void;
+  onMessageFinalized?: (event: MessageFinalizedEvent) => Promise<void> | void;
+  onMessageError?: (event: MessageErrorEvent) => Promise<void> | void;
+}
+
 export class Orchestrator {
   private agents = new Map<string, Agent>();
 
@@ -20,19 +53,60 @@ export class Orchestrator {
     return Array.from(this.agents.values());
   }
 
+  getAgent(agentId: string): Agent | undefined {
+    return this.agents.get(agentId);
+  }
+
   async *runRound(
     taskId: string,
     prompt: string,
     round = 1,
+    options: RunRoundOptions = {},
   ): AsyncGenerator<AgentMessage> {
-    for (const [, agent] of this.agents) {
+    const selectedAgents =
+      options.agentIds && options.agentIds.length > 0
+        ? options.agentIds
+            .map((agentId) => this.agents.get(agentId))
+            .filter((agent): agent is Agent => Boolean(agent))
+        : Array.from(this.agents.values());
+
+    for (const agent of selectedAgents) {
+      const messageId = randomUUID();
       let content = '';
-      for await (const token of agent.respond(prompt)) {
-        content += token;
+      try {
+        for await (const token of agent.respond(prompt)) {
+          content += token;
+          if (options.onStreamDelta) {
+            await options.onStreamDelta({
+              messageId,
+              taskId,
+              agentId: agent.id,
+              agentRole: agent.role,
+              round,
+              delta: token,
+              content,
+              timestamp: Date.now(),
+            });
+          }
+        }
+      } catch (error) {
+        if (options.onMessageError) {
+          await options.onMessageError({
+            messageId,
+            taskId,
+            agentId: agent.id,
+            agentRole: agent.role,
+            round,
+            content,
+            timestamp: Date.now(),
+            error,
+          });
+        }
+        throw error;
       }
 
       const message: AgentMessage = {
-        id: randomUUID(),
+        id: messageId,
         agentId: agent.id,
         agentRole: agent.role,
         type: classifyAgentMessage(content),
@@ -44,6 +118,9 @@ export class Orchestrator {
       };
 
       this.messageBus.emit(message);
+      if (options.onMessageFinalized) {
+        await options.onMessageFinalized({ message });
+      }
       yield message;
     }
   }

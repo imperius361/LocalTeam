@@ -11,6 +11,13 @@ export function StatusIndicator({
 }: StatusIndicatorProps) {
   const ready = snapshot?.sidecar.ready && !connectionError;
   const uptime = snapshot ? Math.round(snapshot.sidecar.uptime / 1000) : 0;
+  const activeAgents =
+    snapshot?.agentStatuses.filter((agent) =>
+      ['thinking', 'writing', 'waiting_for_consensus'].includes(agent.status),
+    ).length ?? 0;
+  const activeTasks =
+    snapshot?.tasks.filter((task) => task.status === 'in_progress').length ?? 0;
+  const sandboxMode = snapshot?.config?.sandbox.defaultMode ?? 'direct';
 
   return (
     <div className="status-indicator">
@@ -25,6 +32,10 @@ export function StatusIndicator({
           {snapshot?.session
             ? `Session ${snapshot.session.status} • up ${uptime}s`
             : `No active session • up ${uptime}s`}
+        </span>
+        <span className="status-subtext">
+          {activeTasks} active task{activeTasks === 1 ? '' : 's'} • {activeAgents} active
+          agent{activeAgents === 1 ? '' : 's'} • {sandboxMode} sandbox
         </span>
       </div>
     </div>

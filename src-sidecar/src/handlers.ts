@@ -23,9 +23,9 @@ export function createHandlers(
         return {
           id: req.id,
           result: await runtime.loadProject(
-            typeof req.params.rootPath === 'string'
+            typeof req.params.rootPath === 'string' && req.params.rootPath.trim()
               ? req.params.rootPath
-              : process.cwd(),
+              : undefined,
           ),
         };
       case 'v1.project.save':
@@ -72,6 +72,24 @@ export function createHandlers(
           ),
         };
       }
+      case 'v1.task.interject': {
+        if (typeof req.params.taskId !== 'string' || !req.params.taskId) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: taskId' },
+          };
+        }
+        if (typeof req.params.guidance !== 'string' || !req.params.guidance.trim()) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: guidance' },
+          };
+        }
+        return {
+          id: req.id,
+          result: await runtime.interjectTask(req.params.taskId, req.params.guidance),
+        };
+      }
       case 'list_tasks':
       case 'v1.task.list':
         return { id: req.id, result: await runtime.listTasks() };
@@ -79,6 +97,64 @@ export function createHandlers(
         return {
           id: req.id,
           result: await runtime.listMessages(
+            typeof req.params.taskId === 'string' ? req.params.taskId : undefined,
+          ),
+        };
+      case 'v1.command.execute': {
+        if (typeof req.params.taskId !== 'string' || !req.params.taskId) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: taskId' },
+          };
+        }
+        if (typeof req.params.agentId !== 'string' || !req.params.agentId) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: agentId' },
+          };
+        }
+        if (typeof req.params.command !== 'string' || !req.params.command.trim()) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: command' },
+          };
+        }
+
+        return {
+          id: req.id,
+          result: await runtime.requestCommandExecution({
+            taskId: req.params.taskId,
+            agentId: req.params.agentId,
+            command: req.params.command,
+            cwd: typeof req.params.cwd === 'string' ? req.params.cwd : undefined,
+          }),
+        };
+      }
+      case 'v1.command.approval.resolve': {
+        if (typeof req.params.approvalId !== 'string' || !req.params.approvalId) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: approvalId' },
+          };
+        }
+        if (req.params.action !== 'approve' && req.params.action !== 'deny') {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Invalid param: action must be approve|deny' },
+          };
+        }
+        return {
+          id: req.id,
+          result: await runtime.resolveCommandApproval(
+            req.params.approvalId,
+            req.params.action,
+          ),
+        };
+      }
+      case 'v1.command.approval.list':
+        return {
+          id: req.id,
+          result: await runtime.listCommandApprovals(
             typeof req.params.taskId === 'string' ? req.params.taskId : undefined,
           ),
         };

@@ -8,3 +8,5 @@ dist/
 *.exe
 
 src-tauri/binaries/
+
+.claude/worktrees/

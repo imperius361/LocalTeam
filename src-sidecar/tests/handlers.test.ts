@@ -43,6 +43,22 @@ describe('Runtime Handlers', () => {
       }),
       listTasks: async () => [{ id: 'task-1' }],
       listMessages: async () => [{ id: 'msg-1' }],
+      requestCommandExecution: async (request: any) => ({
+        id: 'approval-1',
+        taskId: request.taskId,
+        agentId: request.agentId,
+        command: request.command,
+        status: 'pending',
+      }),
+      interjectTask: async (taskId: string, guidance: string) => ({
+        taskId,
+        guidance,
+      }),
+      resolveCommandApproval: async (approvalId: string, action: string) => ({
+        id: approvalId,
+        status: action === 'approve' ? 'completed' : 'denied',
+      }),
+      listCommandApprovals: async () => [{ id: 'approval-1', status: 'pending' }],
       resolveConsensus: async () => ({ consensus: [] }),
     } as unknown as LocalTeamRuntime;
 
@@ -75,5 +91,75 @@ describe('Runtime Handlers', () => {
 
     expect(res.error).toBeUndefined();
     expect(res.result).toEqual([]);
+  });
+
+  it('handles v1.command.execute', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.command.execute',
+      params: {
+        taskId: 'task-1',
+        agentId: 'architect',
+        command: 'git status',
+      },
+    });
+
+    expect(res.error).toBeUndefined();
+    expect((res.result as any).status).toBe('pending');
+  });
+
+  it('validates required params for v1.command.execute', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.command.execute',
+      params: { taskId: 'task-1', command: 'git status' },
+    });
+
+    expect(res.error).toBeDefined();
+    expect(res.error!.message).toContain('agentId');
+  });
+
+  it('handles v1.command.approval.resolve', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.command.approval.resolve',
+      params: { approvalId: 'approval-1', action: 'approve' },
+    });
+
+    expect(res.error).toBeUndefined();
+    expect((res.result as any).status).toBe('completed');
+  });
+
+  it('handles v1.command.approval.list', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.command.approval.list',
+      params: {},
+    });
+
+    expect(res.error).toBeUndefined();
+    expect((res.result as any[])).toHaveLength(1);
+  });
+
+  it('handles v1.task.interject', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.task.interject',
+      params: {
+        taskId: 'task-1',
+        guidance: 'Focus on the auth boundary',
+      },
+    });
+
+    expect(res.error).toBeUndefined();
+    expect(res.result).toEqual({
+      taskId: 'task-1',
+      guidance: 'Focus on the auth boundary',
+    });
   });
 });

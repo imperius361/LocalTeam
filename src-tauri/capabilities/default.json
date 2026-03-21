@@ -1,13 +1,14 @@
 {
   "identifier": "default",
   "description": "Default capabilities for LocalTeam",
-  "windows": ["main"],
+  "windows": ["main", "settings"],
   "permissions": [
     "core:default",
     "opener:default",
     "stronghold:default",
     "stronghold:allow-destroy",
     "stronghold:allow-remove-store-record",
+    "dialog:allow-open",
     "shell:allow-spawn",
     "shell:allow-stdin-write",
     "shell:allow-execute"

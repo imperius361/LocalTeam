@@ -3,6 +3,7 @@ import { Orchestrator } from '../src/orchestrator';
 import { Agent } from '../src/agent';
 import { MessageBus } from '../src/message-bus';
 import { MockProvider } from '../src/providers/mock';
+import type { LlmProvider, SendMessageParams } from '../src/providers/types';
 import type { AgentConfig, AgentMessage } from '../src/types';
 
 function makeAgent(id: string, role: string, responses: string[]): Agent {
@@ -14,6 +15,29 @@ function makeAgent(id: string, role: string, responses: string[]): Agent {
     systemPrompt: `You are a ${role}.`,
   };
   return new Agent(config, new MockProvider(responses));
+}
+
+class ChunkedProvider implements LlmProvider {
+  readonly id = 'mock';
+  readonly name = 'Chunked';
+
+  constructor(private readonly chunks: string[]) {}
+
+  async *sendMessage(_params: SendMessageParams): AsyncGenerator<string> {
+    for (const chunk of this.chunks) {
+      yield chunk;
+    }
+  }
+}
+
+class FailingProvider implements LlmProvider {
+  readonly id = 'mock';
+  readonly name = 'Failing';
+
+  async *sendMessage(_params: SendMessageParams): AsyncGenerator<string> {
+    yield 'partial';
+    throw new Error('Provider unavailable');
+  }
 }
 
 describe('Orchestrator', () => {
@@ -89,6 +113,103 @@ describe('Orchestrator', () => {
 
     const agents = orchestrator.getAgents();
     expect(agents.map((a) => a.id)).toEqual(['a', 'b']);
+  });
+
+  it('emits stream deltas with stable message identity and finalization', async () => {
+    const bus = new MessageBus();
+    const orchestrator = new Orchestrator(bus);
+    const config: AgentConfig = {
+      id: 'streamer',
+      role: 'Engineer',
+      model: 'mock',
+      provider: 'anthropic',
+      systemPrompt: 'Stream in chunks.',
+    };
+    orchestrator.addAgent(new Agent(config, new ChunkedProvider(['Hello', ' ', 'world'])));
+
+    const deltas: Array<{ messageId: string; content: string; delta: string }> = [];
+    const finalized: string[] = [];
+    const results: AgentMessage[] = [];
+
+    for await (const message of orchestrator.runRound('task-stream', 'Prompt', 1, {
+      onStreamDelta: (event) => {
+        deltas.push({
+          messageId: event.messageId,
+          content: event.content,
+          delta: event.delta,
+        });
+      },
+      onMessageFinalized: ({ message }) => {
+        finalized.push(message.id);
+      },
+    })) {
+      results.push(message);
+    }
+
+    expect(results).toHaveLength(1);
+    expect(results[0].content).toBe('Hello world');
+    expect(deltas).toHaveLength(3);
+    expect(deltas.map((entry) => entry.delta)).toEqual(['Hello', ' ', 'world']);
+    expect(deltas.map((entry) => entry.messageId)).toEqual([
+      results[0].id,
+      results[0].id,
+      results[0].id,
+    ]);
+    expect(deltas[2].content).toBe('Hello world');
+    expect(finalized).toEqual([results[0].id]);
+  });
+
+  it('reports stream failures with message context before rethrowing', async () => {
+    const bus = new MessageBus();
+    const orchestrator = new Orchestrator(bus);
+    const config: AgentConfig = {
+      id: 'streamer',
+      role: 'Engineer',
+      model: 'mock',
+      provider: 'anthropic',
+      systemPrompt: 'Fail after one chunk.',
+    };
+    orchestrator.addAgent(new Agent(config, new FailingProvider()));
+
+    const deltas: Array<{ messageId: string; content: string }> = [];
+    const failures: Array<{
+      messageId: string;
+      agentId: string;
+      content: string;
+      error: string;
+    }> = [];
+
+    await expect(async () => {
+      for await (const _ of orchestrator.runRound('task-stream', 'Prompt', 1, {
+        onStreamDelta: (event) => {
+          deltas.push({
+            messageId: event.messageId,
+            content: event.content,
+          });
+        },
+        onMessageError: (event) => {
+          failures.push({
+            messageId: event.messageId,
+            agentId: event.agentId,
+            content: event.content,
+            error: event.error instanceof Error ? event.error.message : String(event.error),
+          });
+        },
+      })) {
+        // drain
+      }
+    }).rejects.toThrow('Provider unavailable');
+
+    expect(deltas).toHaveLength(1);
+    expect(failures).toEqual([
+      {
+        messageId: deltas[0].messageId,
+        agentId: 'streamer',
+        content: 'partial',
+        error: 'Provider unavailable',
+      },
+    ]);
+    expect(bus.getHistory('task-stream')).toHaveLength(0);
   });
 
   it('removes an agent', async () => {

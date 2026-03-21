@@ -116,4 +116,25 @@ describe('validateTeamConfig', () => {
     const errors = validateTeamConfig(config);
     expect(errors.length).toBeGreaterThan(0);
   });
+
+  it('rejects invalid command policy fields on agents', () => {
+    const config: ProjectConfig = {
+      ...validConfig,
+      team: {
+        ...validConfig.team,
+        agents: [
+          {
+            ...validConfig.team.agents[0],
+            canExecuteCommands: 'yes' as any,
+            preApprovedCommands: [123 as any],
+            allowedPaths: [true as any],
+          },
+        ],
+      },
+    };
+    const errors = validateTeamConfig(config);
+    expect(errors.some((error) => error.includes('canExecuteCommands'))).toBe(true);
+    expect(errors.some((error) => error.includes('preApprovedCommands'))).toBe(true);
+    expect(errors.some((error) => error.includes('allowedPaths'))).toBe(true);
+  });
 });

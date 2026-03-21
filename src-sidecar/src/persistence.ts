@@ -1,10 +1,14 @@
 import { Buffer } from 'node:buffer';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import initSqlJs from 'sql.js/dist/sql-asm.js';
 import type { Database, SqlJsStatic } from 'sql.js';
+import type { ProjectConfig } from './types.js';
 import type {
   AgentMessage,
+  CommandApproval,
   ConsensusState,
   SessionState,
   Task,
@@ -12,11 +16,17 @@ import type {
 
 let sqlPromise: Promise<SqlJsStatic> | null = null;
 
+const APP_DATA_DIR_ENV = 'LOCALTEAM_APP_DATA_DIR';
+const WORKSPACE_STORAGE_DIR = 'workspaces';
+const WORKSPACE_CONFIG_FILE = 'project-config.json';
+const WORKSPACE_DATABASE_FILE = 'localteam.db';
+
 interface PersistedState {
   session: SessionState | null;
   tasks: Task[];
   messages: AgentMessage[];
   consensus: ConsensusState[];
+  commandApprovals: CommandApproval[];
 }
 
 interface QueryResult {
@@ -39,7 +49,7 @@ export class ProjectDatabase {
 
   static async open(rootPath: string): Promise<ProjectDatabase> {
     const sql = await getSql();
-    const dbPath = join(rootPath, '.localteam', 'localteam.db');
+    const dbPath = resolveWorkspaceDatabasePath(rootPath);
 
     await mkdir(dirname(dbPath), { recursive: true });
     let buffer: Uint8Array | undefined;
@@ -103,6 +113,28 @@ export class ProjectDatabase {
         supporters_json TEXT NOT NULL,
         summary_json TEXT NOT NULL,
         updated_at INTEGER NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS command_approvals (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        agent_role TEXT NOT NULL,
+        command TEXT NOT NULL,
+        requested_cwd TEXT,
+        effective_cwd TEXT NOT NULL,
+        status TEXT NOT NULL,
+        requires_approval INTEGER NOT NULL,
+        pre_approved INTEGER NOT NULL,
+        reason TEXT,
+        requested_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        decided_at INTEGER,
+        completed_at INTEGER,
+        exit_code INTEGER,
+        stdout TEXT,
+        stderr TEXT,
+        policy_json TEXT NOT NULL
       );
     `);
   }
@@ -194,7 +226,40 @@ export class ProjectDatabase {
         }))
       );
 
-    return { session, tasks, messages, consensus };
+    const commandApprovals = this.db
+      .exec(`
+        SELECT id, task_id, agent_id, agent_role, command, requested_cwd,
+               effective_cwd, status, requires_approval, pre_approved, reason,
+               requested_at, updated_at, decided_at, completed_at, exit_code,
+               stdout, stderr, policy_json
+        FROM command_approvals
+        ORDER BY requested_at ASC
+      `)
+      .flatMap((result: QueryResult) =>
+        result.values.map((row: unknown[]) => ({
+          id: String(row[0]),
+          taskId: String(row[1]),
+          agentId: String(row[2]),
+          agentRole: String(row[3]),
+          command: String(row[4]),
+          requestedCwd: row[5] ? String(row[5]) : undefined,
+          effectiveCwd: String(row[6]),
+          status: String(row[7]) as CommandApproval['status'],
+          requiresApproval: Number(row[8]) === 1,
+          preApproved: Number(row[9]) === 1,
+          reason: row[10] ? String(row[10]) : undefined,
+          requestedAt: Number(row[11]),
+          updatedAt: Number(row[12]),
+          decidedAt: row[13] !== null ? Number(row[13]) : undefined,
+          completedAt: row[14] !== null ? Number(row[14]) : undefined,
+          exitCode: row[15] !== null ? Number(row[15]) : undefined,
+          stdout: row[16] ? String(row[16]) : undefined,
+          stderr: row[17] ? String(row[17]) : undefined,
+          policy: JSON.parse(String(row[18])) as CommandApproval['policy'],
+        }))
+      );
+
+    return { session, tasks, messages, consensus, commandApprovals };
   }
 
   async saveSession(session: SessionState | null): Promise<void> {
@@ -287,8 +352,103 @@ export class ProjectDatabase {
     await this.flush();
   }
 
+  async saveCommandApproval(approval: CommandApproval): Promise<void> {
+    this.db.run(
+      `
+        INSERT OR REPLACE INTO command_approvals
+        (id, task_id, agent_id, agent_role, command, requested_cwd, effective_cwd,
+         status, requires_approval, pre_approved, reason, requested_at, updated_at,
+         decided_at, completed_at, exit_code, stdout, stderr, policy_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        approval.id,
+        approval.taskId,
+        approval.agentId,
+        approval.agentRole,
+        approval.command,
+        approval.requestedCwd ?? null,
+        approval.effectiveCwd,
+        approval.status,
+        approval.requiresApproval ? 1 : 0,
+        approval.preApproved ? 1 : 0,
+        approval.reason ?? null,
+        approval.requestedAt,
+        approval.updatedAt,
+        approval.decidedAt ?? null,
+        approval.completedAt ?? null,
+        approval.exitCode ?? null,
+        approval.stdout ?? null,
+        approval.stderr ?? null,
+        JSON.stringify(approval.policy),
+      ],
+    );
+    await this.flush();
+  }
+
   private async flush(): Promise<void> {
     const data = this.db.export();
     await writeFile(this.dbPath, Buffer.from(data));
   }
+}
+
+export function resolveWorkspaceStorageRoot(workspaceRoot: string): string {
+  return join(resolveAppDataDirectory(), WORKSPACE_STORAGE_DIR, hashWorkspaceRoot(workspaceRoot));
+}
+
+export function resolveWorkspaceConfigPath(workspaceRoot: string): string {
+  return join(resolveWorkspaceStorageRoot(workspaceRoot), WORKSPACE_CONFIG_FILE);
+}
+
+export function resolveWorkspaceDatabasePath(workspaceRoot: string): string {
+  return join(resolveWorkspaceStorageRoot(workspaceRoot), WORKSPACE_DATABASE_FILE);
+}
+
+export async function readWorkspaceConfig(
+  workspaceRoot: string,
+): Promise<ProjectConfig | null> {
+  const configPath = resolveWorkspaceConfigPath(workspaceRoot);
+  try {
+    const raw = await readFile(configPath, 'utf8');
+    return JSON.parse(raw) as ProjectConfig;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function writeWorkspaceConfig(
+  workspaceRoot: string,
+  config: ProjectConfig,
+): Promise<void> {
+  const configPath = resolveWorkspaceConfigPath(workspaceRoot);
+  await mkdir(dirname(configPath), { recursive: true });
+  await writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+}
+
+function resolveAppDataDirectory(): string {
+  const configured = process.env[APP_DATA_DIR_ENV]?.trim();
+  if (configured) {
+    return resolve(configured);
+  }
+
+  return join(tmpdir(), 'localteam');
+}
+
+function hashWorkspaceRoot(workspaceRoot: string): string {
+  const normalized = process.platform === 'win32'
+    ? workspaceRoot.replace(/\\/g, '/').toLowerCase()
+    : workspaceRoot.replace(/\\/g, '/');
+  return createHash('sha256').update(normalized).digest('hex');
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'ENOENT'
+  );
 }

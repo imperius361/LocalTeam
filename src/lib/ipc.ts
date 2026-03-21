@@ -1,6 +1,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ProjectSnapshot, SidecarNotification } from './contracts';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import type {
+  CommandApproval,
+  ProjectConfig,
+  ProjectSnapshot,
+  SidecarNotification,
+} from './contracts';
 
 let requestId = 0;
 let initialized = false;
@@ -12,6 +18,7 @@ const pendingRequests = new Map<
   }
 >();
 const subscribers = new Set<(notification: SidecarNotification) => void>();
+const WORKSPACE_SELECTED_EVENT = 'localteam://workspace-selected';
 
 export async function initIpc(): Promise<void> {
   if (initialized) {
@@ -77,6 +84,12 @@ export async function callSidecar<T = unknown>(
   method: string,
   params: Record<string, unknown> = {},
 ): Promise<T> {
+  if (method === 'v1.credentials.sync') {
+    throw new Error(
+      'v1.credentials.sync is blocked from the webview. Use Rust credential commands.',
+    );
+  }
+
   const id = String(++requestId);
   const message = JSON.stringify({ id, method, params });
 
@@ -97,8 +110,79 @@ export async function restartSidecar(): Promise<void> {
   await invoke('restart_sidecar');
 }
 
-export async function loadProjectSnapshot(): Promise<ProjectSnapshot> {
-  return callSidecar<ProjectSnapshot>('v1.project.load', { rootPath: '.' });
+export async function openSettingsWindow(): Promise<void> {
+  await invoke('open_settings_window');
+}
+
+export function isSettingsWindow(): boolean {
+  try {
+    return getCurrentWebviewWindow().label === 'settings';
+  } catch {
+    return false;
+  }
+}
+
+export async function closeCurrentWindow(): Promise<void> {
+  await getCurrentWebviewWindow().close();
+}
+
+export async function pickProjectFolder(
+  startingDirectory?: string,
+): Promise<string | null> {
+  return invoke<string | null>('pick_project_folder', {
+    ...(startingDirectory ? { startingDirectory } : {}),
+  });
+}
+
+export async function loadProjectSnapshot(
+  rootPath?: string,
+): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.project.load', {
+    ...(rootPath ? { rootPath } : {}),
+  });
+}
+
+export async function saveProjectConfig(config: ProjectConfig): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.project.save', { config });
+}
+
+export async function listCommandApprovals(
+  taskId?: string,
+): Promise<CommandApproval[]> {
+  return callSidecar<CommandApproval[]>('v1.command.approval.list', {
+    ...(taskId ? { taskId } : {}),
+  });
+}
+
+export async function resolveCommandApproval(
+  approvalId: string,
+  action: 'approve' | 'deny',
+): Promise<CommandApproval> {
+  return callSidecar<CommandApproval>('v1.command.approval.resolve', {
+    approvalId,
+    action,
+  });
+}
+
+export async function sendTaskGuidance(
+  taskId: string,
+  guidance?: string,
+): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.task.interject', {
+    taskId,
+    ...(guidance ? { guidance } : {}),
+  });
+}
+
+export async function subscribeToWorkspaceSelections(
+  handler: (rootPath: string) => void,
+): Promise<() => void> {
+  return listen<{ rootPath: string }>(WORKSPACE_SELECTED_EVENT, (event) => {
+    const rootPath = typeof event.payload?.rootPath === 'string' ? event.payload.rootPath : '';
+    if (rootPath) {
+      handler(rootPath);
+    }
+  });
 }
 
 function notifySubscribers(notification: SidecarNotification): void {

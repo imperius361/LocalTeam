@@ -1,12 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sidecarDir = join(__dirname, '..', '..', 'src-sidecar');
 
 let child: ChildProcess;
+let workspaceRoot: string;
+let appDataDir: string;
 const responses: string[] = [];
 let waiting:
   | { id: string; resolve: (value: unknown) => void; reject: (error: Error) => void }
@@ -70,10 +74,30 @@ function sendRequest(
   });
 }
 
+async function createGitWorkspace(prefix: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const result = spawnSync('git', ['init'], {
+    cwd: root,
+    stdio: 'ignore',
+  });
+
+  if (result.status !== 0) {
+    throw new Error(`git init failed for ${root}`);
+  }
+
+  return root;
+}
+
 describe('Orchestrator E2E', () => {
   beforeAll(async () => {
+    workspaceRoot = await createGitWorkspace('localteam-orchestrator-e2e-');
+    appDataDir = await mkdtemp(join(tmpdir(), 'localteam-orchestrator-app-data-'));
     child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
       cwd: sidecarDir,
+      env: {
+        ...process.env,
+        LOCALTEAM_APP_DATA_DIR: appDataDir,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -92,10 +116,44 @@ describe('Orchestrator E2E', () => {
         }
       });
     });
+
+    await sendRequest('v1.project.load', { rootPath: workspaceRoot });
+    await sendRequest('v1.project.save', {
+      config: {
+        team: {
+          name: 'Orchestrator E2E',
+          agents: [
+            {
+              id: 'architect',
+              role: 'Software Architect',
+              model: 'mock',
+              provider: 'mock',
+              systemPrompt: 'Lead the discussion.',
+              canExecuteCommands: true,
+              allowedPaths: ['.'],
+            },
+          ],
+        },
+        consensus: {
+          maxRounds: 2,
+          requiredMajority: 0.5,
+        },
+        sandbox: {
+          defaultMode: 'direct',
+          useWorktrees: false,
+        },
+        fileAccess: {
+          denyList: ['.env', '.ssh/', 'credentials*'],
+        },
+      },
+    });
+    await sendRequest('v1.session.start');
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     child.kill();
+    await rm(workspaceRoot, { recursive: true, force: true });
+    await rm(appDataDir, { recursive: true, force: true });
   });
 
   it('sidecar responds to ping after orchestrator init', async () => {

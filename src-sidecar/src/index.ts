@@ -16,13 +16,16 @@ const handleRequest = createHandlers(runtime);
 const rl = createInterface({ input: process.stdin });
 
 rl.on('line', async (line: string) => {
+  let requestId = 'unknown';
+
   try {
     const req = decodeMessage(line) as IpcRequest;
+    requestId = req.id;
     const res = await handleRequest(req);
     process.stdout.write(encodeMessage(res));
   } catch (err) {
     const errorRes: IpcResponse = {
-      id: 'unknown',
+      id: requestId,
       error: {
         code: -2,
         message: err instanceof Error ? err.message : 'Unknown error',

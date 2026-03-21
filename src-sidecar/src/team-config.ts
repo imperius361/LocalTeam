@@ -36,6 +36,46 @@ export function validateProjectConfig(config: ProjectConfig): string[] {
     if (!agent.systemPrompt) {
       errors.push(`Agent ${agent.id || '(unnamed)'}: systemPrompt is required`);
     }
+    if (
+      agent.allowedPaths !== undefined &&
+      !Array.isArray(agent.allowedPaths)
+    ) {
+      errors.push(`Agent ${agent.id || '(unnamed)'}: allowedPaths must be an array`);
+    }
+    if (
+      agent.allowedPaths &&
+      agent.allowedPaths.some((path) => typeof path !== 'string' || !path.trim())
+    ) {
+      errors.push(
+        `Agent ${agent.id || '(unnamed)'}: allowedPaths must contain non-empty strings`,
+      );
+    }
+    if (
+      agent.canExecuteCommands !== undefined &&
+      typeof agent.canExecuteCommands !== 'boolean'
+    ) {
+      errors.push(
+        `Agent ${agent.id || '(unnamed)'}: canExecuteCommands must be a boolean`,
+      );
+    }
+    if (
+      agent.preApprovedCommands !== undefined &&
+      !Array.isArray(agent.preApprovedCommands)
+    ) {
+      errors.push(
+        `Agent ${agent.id || '(unnamed)'}: preApprovedCommands must be an array`,
+      );
+    }
+    if (
+      agent.preApprovedCommands &&
+      agent.preApprovedCommands.some(
+        (command) => typeof command !== 'string' || !command.trim(),
+      )
+    ) {
+      errors.push(
+        `Agent ${agent.id || '(unnamed)'}: preApprovedCommands must contain non-empty strings`,
+      );
+    }
     if (!SUPPORTED_PROVIDERS.includes(agent.provider)) {
       errors.push(
         `Unsupported provider "${agent.provider}" for agent ${agent.id}`,

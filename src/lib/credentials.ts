@@ -1,98 +1,96 @@
-import { appDataDir, join } from '@tauri-apps/api/path';
-import { Stronghold } from '@tauri-apps/plugin-stronghold';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 
-const CLIENT_NAME = 'localteam';
-const OPENAI_KEY = 'providers.openai';
-const ANTHROPIC_KEY = 'providers.anthropic';
+export type ProviderId = 'openai' | 'anthropic';
 
-type StoreLike = {
-  get(key: string): Promise<Uint8Array | null>;
-  insert(key: string, value: number[]): Promise<void>;
-  remove(key: string): Promise<Uint8Array | null>;
+export type ProviderCredentialStatus = {
+  provider: ProviderId;
+  hasKey: boolean;
 };
 
-let strongholdInstance: Stronghold | null = null;
-let storeInstance: StoreLike | null = null;
+export type CredentialStatus = {
+  unlocked: boolean;
+  vaultExists: boolean;
+  providers: ProviderCredentialStatus[];
+};
 
-async function getVaultPath(): Promise<string> {
-  return join(await appDataDir(), 'localteam-vault.hold');
+export type CredentialOnboardingStatus = {
+  apiKeyPromptDismissed: boolean;
+  hasSavedKeys: boolean;
+  shouldPromptForApiKeys: boolean;
+};
+
+export type ProviderValues = Partial<Record<ProviderId, string>>;
+
+export type CredentialEvent =
+  | { type: 'status'; status: CredentialStatus }
+  | { type: 'onboarding'; onboarding: CredentialOnboardingStatus };
+
+const CREDENTIAL_STATUS_EVENT = 'localteam://credential-status-changed';
+const CREDENTIAL_ONBOARDING_EVENT = 'localteam://credential-onboarding-changed';
+
+export async function createVault(password: string): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>('credentials_create_vault', { password });
 }
 
-async function getStore(password: string): Promise<StoreLike> {
-  if (storeInstance) {
-    return storeInstance;
+export async function unlockVault(password: string): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>('credentials_unlock_vault', { password });
+}
+
+export async function lockVault(): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>('credentials_lock_vault');
+}
+
+export async function saveProviderKeys(values: ProviderValues): Promise<CredentialStatus> {
+  let latest = await getCredentialStatus();
+  for (const provider of ['openai', 'anthropic'] as const) {
+    const value = values[provider];
+    if (typeof value === 'string' && value.trim()) {
+      latest = await invoke<CredentialStatus>('credentials_set_provider_key', {
+        provider,
+        value,
+      });
+    }
   }
 
-  const stronghold = await Stronghold.load(await getVaultPath(), password);
-  let client: { getStore(): StoreLike };
-
-  try {
-    client = await stronghold.loadClient(CLIENT_NAME);
-  } catch {
-    client = await stronghold.createClient(CLIENT_NAME);
-  }
-
-  strongholdInstance = stronghold;
-  storeInstance = client.getStore();
-  return storeInstance;
+  return latest;
 }
 
-export async function unlockVault(password: string): Promise<void> {
-  await getStore(password);
+export async function clearProviderKey(provider: ProviderId): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>('credentials_clear_provider_key', { provider });
 }
 
-export async function lockVault(): Promise<void> {
-  if (strongholdInstance) {
-    await strongholdInstance.unload();
-  }
-  strongholdInstance = null;
-  storeInstance = null;
+export async function getCredentialStatus(): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>('credentials_get_status');
 }
 
-export async function saveProviderKeys(
-  password: string,
-  values: Partial<Record<'openai' | 'anthropic', string>>,
-): Promise<void> {
-  const store = await getStore(password);
-  const stronghold = strongholdInstance;
-
-  await writeValue(store, OPENAI_KEY, values.openai);
-  await writeValue(store, ANTHROPIC_KEY, values.anthropic);
-  await stronghold?.save();
+export async function getCredentialOnboardingState(): Promise<CredentialOnboardingStatus> {
+  return invoke<CredentialOnboardingStatus>('credentials_get_onboarding_state');
 }
 
-export async function readProviderKeys(
-  password: string,
-): Promise<Partial<Record<'openai' | 'anthropic', string>>> {
-  const store = await getStore(password);
+export async function dismissApiKeyPrompt(): Promise<CredentialOnboardingStatus> {
+  return invoke<CredentialOnboardingStatus>('credentials_dismiss_api_key_prompt');
+}
 
-  return {
-    openai: await readValue(store, OPENAI_KEY),
-    anthropic: await readValue(store, ANTHROPIC_KEY),
+export async function syncCredentialsToSidecar(): Promise<CredentialStatus> {
+  return invoke<CredentialStatus>('credentials_sync_to_sidecar');
+}
+
+export async function subscribeToCredentialEvents(
+  handler: (event: CredentialEvent) => void,
+): Promise<() => void> {
+  const unlistenStatus = await listen<CredentialStatus>(CREDENTIAL_STATUS_EVENT, (event) => {
+    handler({ type: 'status', status: event.payload });
+  });
+  const unlistenOnboarding = await listen<CredentialOnboardingStatus>(
+    CREDENTIAL_ONBOARDING_EVENT,
+    (event) => {
+      handler({ type: 'onboarding', onboarding: event.payload });
+    },
+  );
+
+  return () => {
+    unlistenStatus();
+    unlistenOnboarding();
   };
-}
-
-async function writeValue(
-  store: StoreLike,
-  key: string,
-  value: string | undefined,
-): Promise<void> {
-  const nextValue = value?.trim();
-  if (nextValue) {
-    await store.insert(key, Array.from(new TextEncoder().encode(nextValue)));
-    return;
-  }
-
-  const existing = await store.get(key);
-  if (existing) {
-    await store.remove(key);
-  }
-}
-
-async function readValue(store: StoreLike, key: string): Promise<string | undefined> {
-  const data = await store.get(key);
-  if (!data) {
-    return undefined;
-  }
-  return new TextDecoder().decode(data);
 }

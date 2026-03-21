@@ -12,6 +12,8 @@
     "build:sidecar:linux": "node scripts/build-sidecar-linux.mjs",
     "build:sidecar:windows": "node scripts/build-sidecar-windows.mjs",
     "build:windows": "npm run build:sidecar:windows && npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows-cross.conf.json",
+    "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
+    "release": "npm run release:windows",
     "preview": "vite preview",
     "tauri": "tauri",
     "test": "npm run test:sidecar && npm run test:e2e",
@@ -20,6 +22,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-stronghold": "^2",
     "react": "^19.1.0",

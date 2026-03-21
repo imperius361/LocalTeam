@@ -23,6 +23,8 @@ const outputPath = join(
   binariesDir,
   'localteam-sidecar-x86_64-pc-windows-msvc.exe',
 );
+const postjectCliPath = join(root, 'node_modules', 'postject', 'dist', 'cli.js');
+const curlCommand = process.platform === 'win32' ? 'curl.exe' : 'curl';
 
 mkdirSync(binariesDir, { recursive: true });
 mkdirSync(buildDir, { recursive: true });
@@ -34,27 +36,41 @@ function run(command, args, cwd) {
   });
 }
 
+function runNpm(args, cwd) {
+  const npmExecPath = process.env.npm_execpath;
+  if (!npmExecPath) {
+    throw new Error(
+      'npm_execpath is not set. Run this script via npm (for example: npm run build:sidecar:windows).',
+    );
+  }
+
+  run(process.execPath, [npmExecPath, ...args], cwd);
+}
+
 function downloadWindowsNode() {
   if (existsSync(windowsNodePath)) {
     return;
   }
 
   const url = `https://nodejs.org/dist/v${nodeVersion}/win-x64/node.exe`;
-  run('curl', ['-fsSL', '-o', windowsNodePath, url], root);
+  run(curlCommand, ['-fsSL', '-o', windowsNodePath, url], root);
 }
 
-run('npm', ['run', 'build'], sidecarDir);
-run(
-  'npx',
+runNpm(['run', 'build'], sidecarDir);
+runNpm(
   [
-    'esbuild',
-    'dist/index.js',
-    '--bundle',
-    '--platform=node',
-    '--target=node20',
-    '--format=cjs',
-    '--outfile=dist/bundle.cjs',
-  ],
+    'exec',
+    '--',
+    [
+      'esbuild',
+      'dist/index.js',
+      '--bundle',
+      '--platform=node',
+      '--target=node20',
+      '--format=cjs',
+      '--outfile=dist/bundle.cjs',
+    ],
+  ].flat(),
   sidecarDir,
 );
 
@@ -75,10 +91,13 @@ run(process.execPath, ['--experimental-sea-config', seaConfigPath], sidecarDir);
 downloadWindowsNode();
 
 copyFileSync(windowsNodePath, outputPath);
+if (!existsSync(postjectCliPath)) {
+  throw new Error(`postject CLI not found at ${postjectCliPath}. Run npm install in the repo root.`);
+}
 run(
-  'npx',
+  process.execPath,
   [
-    'postject@1.0.0-alpha.6',
+    postjectCliPath,
     outputPath,
     'NODE_SEA_BLOB',
     seaBlobPath,
@@ -91,7 +110,10 @@ run(
 rmSync(seaConfigPath, { force: true });
 rmSync(seaBlobPath, { force: true });
 
-execSync(`file "${outputPath}"`, {
-  cwd: root,
-  stdio: 'inherit',
-});
+if (process.platform !== 'win32') {
+  execSync(`file "${outputPath}"`, {
+    cwd: root,
+    stdio: 'inherit',
+  });
+}
+console.log(`Built sidecar binary: ${outputPath}`);

@@ -3,7 +3,7 @@ import { useEffect } from 'react';
 import { useTheme } from './themes/ThemeContext';
 import { useNav } from './navigation/NavContext';
 import { useAppStore } from './store/appStore';
-import { subscribeToNotifications } from './lib/ipc';
+import { initIpc, subscribeToNotifications } from './lib/ipc';
 import type { SidecarNotification } from './lib/contracts';
 
 import { ThemeSelector } from './components/ThemeSelector';
@@ -24,7 +24,9 @@ function IpcSubscriber() {
   const appendMessage = useAppStore((s) => s.appendMessage);
 
   useEffect(() => {
+    initIpc(); // initialize Tauri event listeners for sidecar-stdout, sidecar-started, sidecar-terminated
     const unsub = subscribeToNotifications((notification: SidecarNotification) => {
+      // Trust sidecar message shapes — params is Record<string, unknown> from IPC JSON
       const { method, params } = notification;
 
       if (method === 'v1.snapshot' && params.snapshot) {

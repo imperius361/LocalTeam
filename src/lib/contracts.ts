@@ -196,3 +196,29 @@ export interface SidecarNotification {
   method: string;
   params: Record<string, unknown>;
 }
+
+// Multi-project UI types
+
+export interface RecentProject {
+  path: string;          // absolute path to directory containing localteam.json
+  name: string;          // from ProjectConfig.team.name
+  lastOpenedAt: number;  // unix ms timestamp
+}
+
+// Derived UI model — built from ProjectSnapshot + RecentProject
+export interface UIProject {
+  id: string;            // btoa(path) — simple stable hash of path
+  name: string;
+  path: string;
+  status: 'active' | 'error' | 'idle';
+  teams: UITeam[];
+  snapshot: ProjectSnapshot | null;
+  lastOpenedAt: number;
+}
+
+export interface UITeam {
+  id: string;            // derived: `${projectId}:${name}`
+  name: string;
+  projectId: string;     // matches UIProject.id
+  agents: AgentStatus[];
+}

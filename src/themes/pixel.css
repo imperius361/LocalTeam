@@ -1,0 +1,55 @@
+/* Pixel strategy game theme - Import at top of main.tsx — NOT a CSS Module */
+
+/* Press Start 2P pixel font */
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+:root[data-theme="pixel"] {
+  --bg-base:     #1a1c2c;
+  --bg-panel:    #16213a;
+  --bg-raised:   #0f3460;
+  --bg-hover:    #1a2848;
+  --border:      #4a5568;
+  --border-soft: #2d3a4a;
+  --accent:      #4ecdc4;
+  --accent-dim:  #1a3a6a;
+  --green:       #38b764;
+  --yellow:      #ffd93d;
+  --red:         #ff4757;
+  --cyan:        #4ecdc4;
+  --text-primary:   #f8f8f8;
+  --text-secondary: #a8b4c8;
+  --text-muted:     #6272a4;
+  --font-sans: 'Press Start 2P', monospace;
+  --font-mono: 'Press Start 2P', monospace;
+  --radius: 0px;
+  --border-width: 3px;
+  --shadow-glow: 3px 3px 0 #000;
+}
+
+/* CRT scanline overlay — pixel theme only */
+[data-theme="pixel"] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.04) 2px,
+    rgba(0,0,0,0.04) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Chunky pixel box utility */
+[data-theme="pixel"] .px-box {
+  border: var(--border-width) solid var(--border);
+  box-shadow: 3px 3px 0 #000;
+}
+
+/* Pixel idle bounce animation */
+@keyframes px-idle {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-2px); }
+}

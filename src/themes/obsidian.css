@@ -1,0 +1,23 @@
+/* Obsidian dark developer theme - Import at top of main.tsx — NOT a CSS Module */
+:root[data-theme="obsidian"] {
+  --bg-base:     #0e1016;
+  --bg-panel:    #13161d;
+  --bg-raised:   #1a1d27;
+  --bg-hover:    #1f2330;
+  --border:      #252836;
+  --border-soft: #1c1f2a;
+  --accent:      #5865f2;
+  --accent-dim:  #2d3561;
+  --green:       #22c55e;
+  --yellow:      #f59e0b;
+  --red:         #ef4444;
+  --cyan:        #22d3ee;
+  --text-primary:   #e2e8f0;
+  --text-secondary: #8892a4;
+  --text-muted:     #4a5568;
+  --font-sans: 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Code', 'Consolas', monospace;
+  --radius: 0px;
+  --border-width: 1px;
+  --shadow-glow: 0 0 0 1px var(--accent), 0 4px 16px rgba(88,101,242,0.2);
+}

@@ -53,3 +53,96 @@
   0%, 100% { transform: translateY(0); }
   50%       { transform: translateY(-2px); }
 }
+
+/* ── React Flow node overrides ──────────────────────────────────────────────── */
+[data-theme="pixel"] .react-flow__node {
+  font-family: var(--font-sans);
+}
+
+[data-theme="pixel"] .react-flow__edge-path {
+  stroke-width: 2;
+}
+
+[data-theme="pixel"] .react-flow__background {
+  background-color: var(--bg-base);
+}
+
+/* ── Topbar pixel overrides ─────────────────────────────────────────────────── */
+[data-theme="pixel"] .topbar-logo {
+  text-shadow: 2px 2px 0 var(--accent);
+}
+
+[data-theme="pixel"] .topbar-breadcrumb-sep {
+  content: "»";
+}
+
+/* ── Sidebar pixel overrides ────────────────────────────────────────────────── */
+[data-theme="pixel"] .sidebar-section-title {
+  letter-spacing: 3px;
+  color: var(--accent);
+}
+
+/* ── Status badge pixel override (square dot) ───────────────────────────────── */
+[data-theme="pixel"] .status-badge {
+  border-radius: 0 !important;
+}
+
+/* ── Progress bar pixel override (chunky + stripe) ──────────────────────────── */
+[data-theme="pixel"] .progress-bar-fill {
+  image-rendering: pixelated;
+}
+
+/* ── Terminal pixel overrides ───────────────────────────────────────────────── */
+[data-theme="pixel"] .terminal-tab-active {
+  border-bottom: 2px solid var(--accent);
+  text-shadow: 1px 1px 0 #000;
+}
+
+[data-theme="pixel"] .terminal-tab::before {
+  content: "▶ ";
+}
+
+/* ── RPG stat labels (pixel only) ───────────────────────────────────────────── */
+[data-theme="pixel"] .stat-label {
+  font-size: 8px;
+  letter-spacing: 2px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+[data-theme="pixel"] .task-item-title::before {
+  content: "⚔ ";
+}
+
+[data-theme="pixel"] .activity-item-time {
+  color: var(--accent);
+}
+
+/* ── Global pixel link/button overrides ─────────────────────────────────────── */
+[data-theme="pixel"] button {
+  cursor: crosshair;
+}
+
+[data-theme="pixel"] .btn-primary {
+  box-shadow: var(--shadow-glow);
+  transition: box-shadow 0.1s;
+}
+
+[data-theme="pixel"] .btn-primary:hover {
+  box-shadow: 4px 4px 0 #000, var(--shadow-glow);
+}
+
+/* ── Pixel scrollbar ────────────────────────────────────────────────────────── */
+[data-theme="pixel"] ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+[data-theme="pixel"] ::-webkit-scrollbar-thumb {
+  border-radius: 0;
+  background: var(--accent);
+}
+
+[data-theme="pixel"] ::-webkit-scrollbar-track {
+  background: var(--bg-base);
+}

@@ -174,7 +174,7 @@ export function AgentView(): React.ReactElement {
               minWidth: 0,
             }}
           >
-            <div style={statLabelStyle}>{stat.label}</div>
+            <div className="stat-label" style={statLabelStyle}>{stat.label}</div>
             <div style={statValueStyle}>{stat.value}</div>
             {stat.sub && <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>{stat.sub}</div>}
           </div>
@@ -216,7 +216,7 @@ export function AgentView(): React.ReactElement {
                       {isInProgress ? '● IN PROGRESS' : task.status === 'completed' ? '✓ DONE' : '○ PENDING'}
                     </div>
                     {/* Title */}
-                    <div style={{ fontSize: 12, color: 'var(--text-primary)', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div className="task-item-title" style={{ fontSize: 12, color: 'var(--text-primary)', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {task.title}
                     </div>
                     {/* Meta */}
@@ -249,7 +249,7 @@ export function AgentView(): React.ReactElement {
                 return (
                   <div key={msg.id} style={{ display: 'flex', gap: 10, padding: '8px 16px', fontSize: 12, lineHeight: 1.5, borderBottom: '1px solid var(--border)' }}>
                     {/* Timestamp */}
-                    <span style={{ width: 50, flexShrink: 0, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>
+                    <span className="activity-item-time" style={{ width: 50, flexShrink: 0, fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--text-muted)' }}>
                       {formatTime(msg.timestamp)}
                     </span>
                     {/* Type tag */}
@@ -281,6 +281,7 @@ export function AgentView(): React.ReactElement {
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
+                className={isActive ? 'terminal-tab terminal-tab-active' : 'terminal-tab'}
                 style={{
                   background: 'transparent',
                   border: 'none',

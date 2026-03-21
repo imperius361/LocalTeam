@@ -125,7 +125,7 @@ export function Topbar(): React.ReactElement {
   return (
     <div style={containerStyle}>
       {/* Logo */}
-      <span style={logoStyle}>
+      <span className="topbar-logo" style={logoStyle}>
         {isPixel ? '⚔ LOCALTEAM' : 'LOCALTEAM'}
       </span>
 
@@ -144,7 +144,7 @@ export function Topbar(): React.ReactElement {
           return (
             <React.Fragment key={index}>
               {index > 0 && (
-                <span style={separatorStyle}>{separator}</span>
+                <span className="topbar-breadcrumb-sep" style={separatorStyle}>{separator}</span>
               )}
               {isLast ? (
                 <span

@@ -133,7 +133,7 @@ export function Sidebar(): React.ReactElement {
   return (
     <div style={containerStyle}>
       {/* Teams section */}
-      <div style={sectionHeaderStyle}>Teams</div>
+      <div className="sidebar-section-title" style={sectionHeaderStyle}>Teams</div>
 
       {team && (
         <div
@@ -155,7 +155,7 @@ export function Sidebar(): React.ReactElement {
       )}
 
       {/* Agents section */}
-      <div style={{ ...sectionHeaderStyle, marginTop: 8 }}>Agents</div>
+      <div className="sidebar-section-title" style={{ ...sectionHeaderStyle, marginTop: 8 }}>Agents</div>
 
       {agentStatuses.map((agent) => {
         const isActive =

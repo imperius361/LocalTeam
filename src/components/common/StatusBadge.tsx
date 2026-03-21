@@ -67,7 +67,7 @@ export function StatusBadge({ status, showLabel = true }: StatusBadgeProps): Rea
   return (
     <>
       {pulse && ensurePulseKeyframes()}
-      <div style={containerStyle}>
+      <div className="status-badge" style={containerStyle}>
         <div style={dotStyle} />
         {showLabel && <span style={labelStyle}>{label}</span>}
       </div>

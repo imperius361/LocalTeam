@@ -38,7 +38,7 @@ export function ProgressBar({ value, color = 'var(--accent)', height }: Progress
 
   return (
     <div style={containerStyle}>
-      <div style={fillStyle} />
+      <div className="progress-bar-fill" style={fillStyle} />
     </div>
   );
 }

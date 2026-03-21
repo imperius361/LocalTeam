@@ -6,16 +6,30 @@ import { canonicalizeWorkspacePath } from '../src/workspace-path';
 
 export async function createGitWorkspace(prefix: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), prefix));
-  const result = spawnSync('git', ['init'], {
+  const initResult = spawnSync('git', ['init'], {
     cwd: root,
     stdio: 'ignore',
   });
 
-  if (result.status !== 0) {
+  if (initResult.status !== 0) {
     throw new Error(`git init failed for ${root}`);
   }
 
-  return canonicalizeWorkspacePath(root);
+  const topLevelResult = spawnSync('git', ['rev-parse', '--show-toplevel'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+
+  if (topLevelResult.status !== 0) {
+    throw new Error(`git rev-parse failed for ${root}`);
+  }
+
+  const topLevel = topLevelResult.stdout.trim();
+  if (!topLevel) {
+    throw new Error(`git rev-parse returned an empty workspace root for ${root}`);
+  }
+
+  return canonicalizeWorkspacePath(topLevel);
 }
 
 export async function createAppDataDir(prefix: string): Promise<string> {

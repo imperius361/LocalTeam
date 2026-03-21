@@ -78,6 +78,11 @@ describe('LocalTeamRuntime packaged-first-run bootstrap', () => {
     try {
       const snapshot = await runtime.loadProject();
       expect(snapshot.projectRoot).toBe(root);
+      const projectRoot = snapshot.projectRoot;
+      if (!projectRoot) {
+        throw new Error('Expected runtime to resolve a project root');
+      }
+
       expect(snapshot.config).toMatchObject<ProjectConfig>({
         team: {
           name: 'Default LocalTeam',
@@ -88,24 +93,41 @@ describe('LocalTeamRuntime packaged-first-run bootstrap', () => {
           requiredMajority: 0.66,
         },
         sandbox: {
-          defaultMode: 'direct',
+          defaultMode: 'worktree',
           useWorktrees: true,
         },
         fileAccess: {
-          denyList: ['.env', '.ssh/', 'credentials*'],
+          denyList: [
+            '.env',
+            '.env.*',
+            '.git',
+            '.git/',
+            '.git-credentials',
+            '.npmrc',
+            '.pypirc',
+            '.ssh',
+            '.ssh/',
+            'credentials*',
+            '*.key',
+            '*.pem',
+            '*.p12',
+            '*.pfx',
+            '*.tfstate',
+            '*.tfstate.*',
+          ],
         },
       });
 
       const appDataConfig = join(
-        resolveWorkspaceStorageRoot(root),
+        resolveWorkspaceStorageRoot(projectRoot),
         'project-config.json',
       );
       const configFromAppData = JSON.parse(await readFile(appDataConfig, 'utf8')) as ProjectConfig;
       expect(configFromAppData.team.name).toBe('Default LocalTeam');
       expect(configFromAppData.team.agents).toHaveLength(1);
 
-      await expect(access(join(root, 'localteam.json'))).rejects.toThrow();
-      await expect(access(join(root, '.localteam', 'localteam.db'))).rejects.toThrow();
+      await expect(access(join(projectRoot, 'localteam.json'))).rejects.toThrow();
+      await expect(access(join(projectRoot, '.localteam', 'localteam.db'))).rejects.toThrow();
     } finally {
       runtime.dispose();
       await rm(root, { recursive: true, force: true });

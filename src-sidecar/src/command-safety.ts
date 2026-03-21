@@ -45,6 +45,13 @@ export function evaluateCommandPolicy(input: CommandPolicyInput): CommandPolicyR
     );
   }
 
+  if (containsUnsupportedControlCharacters(request.command)) {
+    return deny(
+      baseResult,
+      'Command contains unsupported control characters.',
+    );
+  }
+
   const sandboxRoot = resolveSandboxRoot(projectRoot, config, task);
   if (!sandboxRoot) {
     return deny(
@@ -108,12 +115,18 @@ export function evaluateCommandPolicy(input: CommandPolicyInput): CommandPolicyR
     }
   }
 
-  const preApproved = isCommandPreApproved(request.command, agent.preApprovedCommands ?? []);
+  const requiresManualApproval = hasRiskyShellSyntax(request.command);
+  const preApproved = requiresManualApproval
+    ? false
+    : isCommandPreApproved(request.command, agent.preApprovedCommands ?? []);
   return {
     ...baseResult,
     allowed: true,
     preApproved,
-    requiresApproval: !preApproved,
+    requiresApproval: requiresManualApproval || !preApproved,
+    reason: requiresManualApproval
+      ? 'Command uses shell metacharacters or globs and requires manual approval.'
+      : baseResult.reason,
   };
 }
 
@@ -246,6 +259,14 @@ function matchesPathPattern(relativePath: string, pattern: string): boolean {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function containsUnsupportedControlCharacters(command: string): boolean {
+  return /[\r\n\0]/.test(command);
+}
+
+function hasRiskyShellSyntax(command: string): boolean {
+  return /(?:&&|\|\||[|<>;`]|[$][(]|[*?[\]])/.test(command);
 }
 
 function isCommandPreApproved(command: string, preApproved: string[]): boolean {

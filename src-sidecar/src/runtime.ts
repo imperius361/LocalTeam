@@ -54,11 +54,28 @@ const DEFAULT_CONSENSUS = {
   requiredMajority: 0.66,
 } satisfies ProjectConfig['consensus'];
 const DEFAULT_SANDBOX = {
-  defaultMode: 'direct',
+  defaultMode: 'worktree',
   useWorktrees: true,
 } satisfies ProjectConfig['sandbox'];
 const DEFAULT_FILE_ACCESS = {
-  denyList: ['.env', '.ssh/', 'credentials*'],
+  denyList: [
+    '.env',
+    '.env.*',
+    '.git',
+    '.git/',
+    '.git-credentials',
+    '.npmrc',
+    '.pypirc',
+    '.ssh',
+    '.ssh/',
+    'credentials*',
+    '*.key',
+    '*.pem',
+    '*.p12',
+    '*.pfx',
+    '*.tfstate',
+    '*.tfstate.*',
+  ],
 } satisfies ProjectConfig['fileAccess'];
 const FALLBACK_DEFAULT_TEAM = {
   name: 'Default LocalTeam',
@@ -262,11 +279,28 @@ export class LocalTeamRuntime {
         requiredMajority: 0.66,
       },
       sandbox: this.config?.sandbox ?? {
-        defaultMode: 'direct',
+        defaultMode: 'worktree',
         useWorktrees: true,
       },
       fileAccess: this.config?.fileAccess ?? {
-        denyList: ['.env', '.ssh/', 'credentials*'],
+        denyList: [
+          '.env',
+          '.env.*',
+          '.git',
+          '.git/',
+          '.git-credentials',
+          '.npmrc',
+          '.pypirc',
+          '.ssh',
+          '.ssh/',
+          'credentials*',
+          '*.key',
+          '*.pem',
+          '*.p12',
+          '*.pfx',
+          '*.tfstate',
+          '*.tfstate.*',
+        ],
       },
     };
   }

@@ -1,0 +1,46 @@
+{
+  "name": "localteam",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:sidecar:linux": "node scripts/build-sidecar-linux.mjs",
+    "build:sidecar:windows": "node scripts/build-sidecar-windows.mjs",
+    "build:windows": "npm run build:sidecar:windows && npm run tauri build -- --runner cargo-xwin --target x86_64-pc-windows-msvc --config src-tauri/tauri.windows-cross.conf.json",
+    "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release-windows.ps1",
+    "release": "npm run release:windows",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "test": "npm run test:sidecar && npm run test:e2e",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:sidecar": "cd src-sidecar && npx vitest run"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-stronghold": "^2",
+    "@xyflow/react": "^12.10.1",
+    "motion": "^12.38.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "use-sync-external-store": "^1.6.0",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "esbuild": "^0.27.4",
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "~5.8.3",
+    "vite": "^7.0.4",
+    "vitest": "^4.1.0"
+  }
+}

@@ -1,0 +1,12 @@
+node_modules/
+target/
+dist/
+.superpowers/
+.localteam/
+.localteam-build/
+.worktrees/
+*.exe
+
+src-tauri/binaries/
+
+.claude/worktrees/

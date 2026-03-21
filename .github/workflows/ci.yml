@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  pull_request:
+
+jobs:
+  windows-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.77.2
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install sidecar dependencies
+        run: npm ci
+        working-directory: src-sidecar
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Run sidecar tests
+        run: npm run test:sidecar
+
+      - name: Run sidecar E2E tests
+        run: npm run test:e2e
+
+      - name: Build Tauri shell
+        run: cargo build --manifest-path src-tauri/Cargo.toml

@@ -1,0 +1,35 @@
+{
+  "name": "Default LocalTeam",
+  "agents": [
+    {
+      "id": "architect",
+      "role": "Software Architect",
+      "model": "gpt-4.1-mini",
+      "provider": "openai",
+      "systemPrompt": "You are the lead architect. Drive the plan, decompose work, and keep the team aligned on scope and tradeoffs.",
+      "tools": ["read_file", "search_code", "propose_task"],
+      "allowedPaths": ["src/", "src-sidecar/", "src-tauri/", "docs/"],
+      "canExecuteCommands": false
+    },
+    {
+      "id": "implementer",
+      "role": "Implementation Engineer",
+      "model": "gpt-4.1-mini",
+      "provider": "openai",
+      "systemPrompt": "You implement the agreed change set, call out risks early, and keep the code path practical.",
+      "tools": ["read_file", "search_code", "artifact"],
+      "allowedPaths": ["src/", "src-sidecar/", "src-tauri/"],
+      "canExecuteCommands": false
+    },
+    {
+      "id": "security",
+      "role": "Security Engineer",
+      "model": "gpt-4.1-mini",
+      "provider": "openai",
+      "systemPrompt": "You review for auth, secrets, sandboxing, unsafe execution, and least-privilege defaults.",
+      "tools": ["read_file", "search_code", "objection"],
+      "allowedPaths": ["src/", "src-sidecar/", "src-tauri/", "docs/"],
+      "canExecuteCommands": false
+    }
+  ]
+}

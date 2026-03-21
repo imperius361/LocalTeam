@@ -40,6 +40,7 @@ describe('LocalTeamRuntime failure observability', () => {
   it('surfaces provider failures during startup as system messages and review state', async () => {
     const root = await createGitWorkspace('localteam-runtime-provider-failure-');
     const notifications: IpcNotification[] = [];
+    let runtime: import('../src/runtime.js').LocalTeamRuntime | undefined;
 
     try {
       const providerFactory = await import('../src/providers/factory.js');
@@ -59,7 +60,7 @@ describe('LocalTeamRuntime failure observability', () => {
       }));
 
       const { LocalTeamRuntime } = await import('../src/runtime.js');
-      const runtime = new LocalTeamRuntime((notification) => {
+      runtime = new LocalTeamRuntime((notification) => {
         notifications.push(notification);
       });
 
@@ -104,6 +105,7 @@ describe('LocalTeamRuntime failure observability', () => {
         ),
       ).toBe(true);
     } finally {
+      runtime?.dispose();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -111,6 +113,7 @@ describe('LocalTeamRuntime failure observability', () => {
   it('surfaces worktree setup failures without leaving a stale sandbox path', async () => {
     const root = await createGitWorkspace('localteam-runtime-worktree-failure-');
     const notifications: IpcNotification[] = [];
+    let runtime: import('../src/runtime.js').LocalTeamRuntime | undefined;
     const config: ProjectConfig = {
       ...baseConfig,
       sandbox: {
@@ -121,7 +124,7 @@ describe('LocalTeamRuntime failure observability', () => {
 
     try {
       const { LocalTeamRuntime } = await import('../src/runtime.js');
-      const runtime = new LocalTeamRuntime((notification) => {
+      runtime = new LocalTeamRuntime((notification) => {
         notifications.push(notification);
       });
 
@@ -162,6 +165,7 @@ describe('LocalTeamRuntime failure observability', () => {
       }, 2_000);
       await new Promise((resolve) => setTimeout(resolve, 150));
     } finally {
+      runtime?.dispose();
       await rm(root, { recursive: true, force: true });
     }
   });

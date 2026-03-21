@@ -100,6 +100,7 @@ describe('LocalTeamRuntime task decomposition and streaming notifications', () =
         return currentRoot?.status === 'completed' || currentRoot?.status === 'review';
       }, 2_000);
     } finally {
+      runtime.dispose();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -117,6 +118,7 @@ describe('LocalTeamRuntime task decomposition and streaming notifications', () =
       expect(snapshot.projectRoot).toBe(root);
       expect((await runtime.status()).projectRoot).toBe(root);
     } finally {
+      runtime.dispose();
       await rm(root, { recursive: true, force: true });
     }
   });

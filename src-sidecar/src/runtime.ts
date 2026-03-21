@@ -28,6 +28,7 @@ import {
   parseProjectConfig,
   validateProjectConfig,
 } from './team-config.js';
+import { canonicalizeWorkspacePath } from './workspace-path.js';
 import type {
   AgentConfig,
   CommandApproval,
@@ -135,6 +136,10 @@ export class LocalTeamRuntime {
     return this.getSnapshot();
   }
 
+  dispose(): void {
+    this.clearLoadedProject();
+  }
+
   private clearLoadedProject(): void {
     this.projectWatcher?.close();
     this.projectWatcher = undefined;
@@ -168,7 +173,7 @@ export class LocalTeamRuntime {
     }
 
     const trimmed = rootPath.trim();
-    return trimmed ? resolve(trimmed) : null;
+    return trimmed ? canonicalizeWorkspacePath(trimmed) : null;
   }
 
   async loadProject(rootPath?: string): Promise<ProjectSnapshot> {
@@ -1374,7 +1379,7 @@ export class LocalTeamRuntime {
     }
 
     try {
-      this.projectWatcher = watch(
+      const watcher = watch(
         projectRoot,
         { recursive: true },
         (eventType: string, filename: string | Buffer | null) => {
@@ -1398,6 +1403,24 @@ export class LocalTeamRuntime {
           });
         },
       );
+      watcher.on('error', (error) => {
+        try {
+          watcher.close();
+        } catch {
+          // Ignore close failures while the watcher is already unwinding.
+        }
+
+        if (this.projectWatcher === watcher) {
+          this.projectWatcher = undefined;
+        }
+
+        if (isWatcherTeardownError(error)) {
+          return;
+        }
+
+        this.lastError = this.formatError(error);
+      });
+      this.projectWatcher = watcher;
     } catch {
       this.projectWatcher = undefined;
     }
@@ -1575,14 +1598,14 @@ async function runShellCommand(command: string, cwd: string): Promise<ShellComma
 
 async function resolveGitWorkspaceRoot(rootPath: string): Promise<string | null> {
   return runGitCommand(resolve(rootPath), ['rev-parse', '--show-toplevel'])
-    .then((value) => resolve(value))
+    .then((value) => canonicalizeWorkspacePath(value))
     .catch(() => null);
 }
 
 function resolveDefaultProjectRoot(): string | null {
   const configured = process.env.LOCALTEAM_DEFAULT_PROJECT_ROOT?.trim();
   if (configured) {
-    return resolve(configured);
+    return canonicalizeWorkspacePath(configured);
   }
   return null;
 }
@@ -1617,6 +1640,15 @@ function directoryExists(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isWatcherTeardownError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error.code === 'EPERM' || error.code === 'ENOENT')
+  );
 }
 
 async function readTemplateFile(

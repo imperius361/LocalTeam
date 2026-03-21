@@ -51,6 +51,7 @@ describe('LocalTeamRuntime packaged-first-run bootstrap', () => {
       expect(snapshot.session).toBeNull();
       expect(snapshot.tasks).toHaveLength(0);
     } finally {
+      runtime.dispose();
       cwdSpy.mockRestore();
       await rm(root, { recursive: true, force: true });
       await rm(appDataDir, { recursive: true, force: true });
@@ -106,6 +107,7 @@ describe('LocalTeamRuntime packaged-first-run bootstrap', () => {
       await expect(access(join(root, 'localteam.json'))).rejects.toThrow();
       await expect(access(join(root, '.localteam', 'localteam.db'))).rejects.toThrow();
     } finally {
+      runtime.dispose();
       await rm(root, { recursive: true, force: true });
       await rm(appDataDir, { recursive: true, force: true });
     }

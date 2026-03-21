@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import initSqlJs from 'sql.js/dist/sql-asm.js';
 import type { Database, SqlJsStatic } from 'sql.js';
 import type { ProjectConfig } from './types.js';
+import { canonicalizeWorkspacePath } from './workspace-path.js';
 import type {
   AgentMessage,
   CommandApproval,
@@ -438,9 +439,10 @@ function resolveAppDataDirectory(): string {
 }
 
 function hashWorkspaceRoot(workspaceRoot: string): string {
+  const canonicalRoot = canonicalizeWorkspacePath(workspaceRoot);
   const normalized = process.platform === 'win32'
-    ? workspaceRoot.replace(/\\/g, '/').toLowerCase()
-    : workspaceRoot.replace(/\\/g, '/');
+    ? canonicalRoot.replace(/\\/g, '/').toLowerCase()
+    : canonicalRoot.replace(/\\/g, '/');
   return createHash('sha256').update(normalized).digest('hex');
 }
 

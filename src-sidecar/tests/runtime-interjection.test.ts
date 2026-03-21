@@ -48,6 +48,7 @@ describe('LocalTeamRuntime task interjection', () => {
   it('restarts a completed task with guidance and preserves history', async () => {
     const root = await createGitWorkspace('localteam-interject-completed-');
     const prompts: PromptCapture[] = [];
+    const runtime = new LocalTeamRuntime(() => {});
 
     try {
       const createAgentSpy = vi.spyOn(providerFactory, 'createAgent');
@@ -69,7 +70,6 @@ describe('LocalTeamRuntime task interjection', () => {
         hasCredentials: true,
       }));
 
-      const runtime = new LocalTeamRuntime(() => {});
       await runtime.loadProject(root);
       await runtime.saveProject(baseConfig);
       await runtime.startSession();
@@ -105,6 +105,7 @@ describe('LocalTeamRuntime task interjection', () => {
         ),
       ).toBe(true);
     } finally {
+      runtime.dispose();
       await rm(root, { recursive: true, force: true });
     }
   });
@@ -112,6 +113,7 @@ describe('LocalTeamRuntime task interjection', () => {
   it('queues guidance on a live task and feeds it into the next round', async () => {
     const root = await createGitWorkspace('localteam-interject-live-');
     const prompts: PromptCapture[] = [];
+    const runtime = new LocalTeamRuntime(() => {});
     let releaseSecondAgent!: () => void;
     const secondAgentGate = new Promise<void>((resolve) => {
       releaseSecondAgent = resolve;
@@ -183,7 +185,6 @@ describe('LocalTeamRuntime task interjection', () => {
         hasCredentials: true,
       }));
 
-      const runtime = new LocalTeamRuntime(() => {});
       await runtime.loadProject(root);
       await runtime.saveProject(config);
       await runtime.startSession();
@@ -222,6 +223,7 @@ describe('LocalTeamRuntime task interjection', () => {
         'Bias the next round toward least privilege.',
       );
     } finally {
+      runtime.dispose();
       releaseSecondAgent?.();
       await rm(root, { recursive: true, force: true });
     }

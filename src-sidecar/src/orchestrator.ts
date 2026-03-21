@@ -34,6 +34,7 @@ export interface RunRoundOptions {
   onStreamDelta?: (event: StreamDeltaEvent) => Promise<void> | void;
   onMessageFinalized?: (event: MessageFinalizedEvent) => Promise<void> | void;
   onMessageError?: (event: MessageErrorEvent) => Promise<void> | void;
+  decorateMessage?: (message: AgentMessage, agent: Agent) => AgentMessage;
 }
 
 export class Orchestrator {
@@ -105,7 +106,7 @@ export class Orchestrator {
         throw error;
       }
 
-      const message: AgentMessage = {
+      const baseMessage: AgentMessage = {
         id: messageId,
         agentId: agent.id,
         agentRole: agent.role,
@@ -116,6 +117,9 @@ export class Orchestrator {
         round,
         tokenEstimate: estimateTokens(content),
       };
+      const message = options.decorateMessage
+        ? options.decorateMessage(baseMessage, agent)
+        : baseMessage;
 
       this.messageBus.emit(message);
       if (options.onMessageFinalized) {

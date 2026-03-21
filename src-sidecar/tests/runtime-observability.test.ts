@@ -87,7 +87,7 @@ describe('LocalTeamRuntime failure observability', () => {
 
       const taskMessages = await runtime.listMessages(taskId);
       const failureMessage = taskMessages.find((message) => message.type === 'system');
-      expect(failureMessage?.content).toContain('task decomposition');
+      expect(failureMessage?.content).toContain('planning round 1');
       expect(failureMessage?.content).toContain('Simulated provider outage');
 
       const latest = await runtime.status();
@@ -138,6 +138,12 @@ describe('LocalTeamRuntime failure observability', () => {
       const taskId = snapshot.tasks[snapshot.tasks.length - 1].id;
 
       await waitFor(async () => {
+        const tasks = await runtime.listTasks();
+        return tasks.some((task) => task.id === taskId && task.status === 'review');
+      }, 2_000);
+      await runtime.respondToTaskReview(taskId, 'approve');
+
+      await waitFor(async () => {
         return notifications.some(
           (notification) =>
             notification.method === 'v1.shell.notification' &&
@@ -146,10 +152,12 @@ describe('LocalTeamRuntime failure observability', () => {
       }, 2_000);
 
       const latest = await runtime.status();
-      const task = latest.tasks.find((entry) => entry.id === taskId);
+      const task = latest.tasks.find(
+        (entry) => entry.parentTaskId === taskId && entry.origin === 'agent_subtask',
+      );
       const worktreeMessage = latest.messages.find(
         (message) =>
-          message.taskId === taskId &&
+          message.taskId === task?.id &&
           message.type === 'system' &&
           message.content.includes('could not prepare a worktree'),
       );
@@ -160,7 +168,7 @@ describe('LocalTeamRuntime failure observability', () => {
       await waitFor(async () => {
         const tasks = await runtime.listTasks();
         return tasks.some(
-          (entry) => entry.id === taskId && entry.status !== 'in_progress',
+          (entry) => entry.parentTaskId === taskId && entry.status !== 'in_progress',
         );
       }, 2_000);
       await new Promise((resolve) => setTimeout(resolve, 150));

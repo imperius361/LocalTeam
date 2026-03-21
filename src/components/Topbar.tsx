@@ -3,6 +3,8 @@ import { useNav } from '../navigation/NavContext';
 import { useAppStore } from '../store/appStore';
 import { useTheme } from '../themes/ThemeContext';
 import type { NavLayer } from '../navigation/types';
+import { openSettingsWindow } from '../lib/ipc';
+import { countActiveRequestTasks } from '../lib/taskSelectors';
 
 function getBreadcrumbLabel(entry: NavLayer, teamName?: string): string {
   switch (entry.layer) {
@@ -20,7 +22,7 @@ function getBreadcrumbLabel(entry: NavLayer, teamName?: string): string {
 export function Topbar(): React.ReactElement {
   const { navStack, navigateTo } = useNav();
   const snapshot = useAppStore((s) => s.snapshot);
-  const { theme, resetTheme } = useTheme();
+  const { theme } = useTheme();
 
   const isPixel = theme === 'pixel';
 
@@ -33,7 +35,7 @@ export function Topbar(): React.ReactElement {
     ).length ?? 0;
 
   const tasksRunning =
-    snapshot?.tasks.filter((t) => t.status === 'in_progress').length ?? 0;
+    snapshot ? countActiveRequestTasks(snapshot.tasks) : 0;
 
   const sidecarReady = snapshot?.sidecar?.ready ?? false;
 
@@ -196,10 +198,19 @@ export function Topbar(): React.ReactElement {
           </span>
           <div style={sidecarDotStyle} title={sidecarReady ? 'Sidecar online' : 'Sidecar offline'} />
         </div>
-        <button style={settingsButtonStyle} onClick={resetTheme}>
+        <button
+          style={settingsButtonStyle}
+          onClick={() => {
+            void handleTopbarSettingsClick();
+          }}
+        >
           Settings
         </button>
       </div>
     </div>
   );
+}
+
+export async function handleTopbarSettingsClick(): Promise<void> {
+  await openSettingsWindow();
 }

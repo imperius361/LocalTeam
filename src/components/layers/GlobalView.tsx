@@ -1,7 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';
-import { callSidecar } from '../../lib/ipc';
+import { loadProjectSnapshot, pickProjectFolder } from '../../lib/ipc';
+import { formatWorkspaceError, loadAndStoreWorkspace } from '../../lib/workspace';
+import { countActiveRequestTasks } from '../../lib/taskSelectors';
 import { ProgressBar } from '../common/ProgressBar';
 import type { RecentProject } from '../../lib/contracts';
 
@@ -10,19 +12,16 @@ export function GlobalView(): React.ReactElement {
   const snapshot = useAppStore((s) => s.snapshot);
   const recentProjects = useAppStore((s) => s.recentProjects);
   const loadRecents = useAppStore((s) => s.loadRecents);
+  const setSnapshot = useAppStore((s) => s.setSnapshot);
+  const addRecentProject = useAppStore((s) => s.addRecentProject);
+  const setActiveProjectPath = useAppStore((s) => s.setActiveProjectPath);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
-  const autoLoadAttempted = useRef(false);
+  const [loadingProjectPath, setLoadingProjectPath] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     loadRecents();
   }, [loadRecents]);
-
-  useEffect(() => {
-    if (!autoLoadAttempted.current && recentProjects.length > 0 && snapshot === null) {
-      autoLoadAttempted.current = true;
-      callSidecar('v1.project.load', { rootPath: recentProjects[0].path }).catch(console.error);
-    }
-  }, [recentProjects, snapshot]);
 
   const agentStatuses = snapshot?.agentStatuses ?? [];
   const tasks = snapshot?.tasks ?? [];
@@ -31,7 +30,7 @@ export function GlobalView(): React.ReactElement {
     (a) => a.status !== 'idle' && a.status !== 'unavailable',
   ).length;
   const totalAgents = agentStatuses.length;
-  const runningTasks = tasks.filter((t) => t.status === 'in_progress').length;
+  const runningTasks = countActiveRequestTasks(tasks);
   const sidecarReady = snapshot?.sidecar?.ready ?? false;
 
   const alertAgents = agentStatuses.filter(
@@ -39,19 +38,51 @@ export function GlobalView(): React.ReactElement {
   );
   const hasAlerts = alertAgents.length > 0;
 
-  async function openProjectDialog() {
+  async function loadAndActivateProject(rootPath: string): Promise<void> {
+    setLoadingProjectPath(rootPath);
+    setLoadError(null);
+
+    try {
+      const loadedSnapshot = await loadAndStoreWorkspace(rootPath, {
+        loadProjectSnapshot,
+        setSnapshot,
+        addRecentProject,
+        setActiveProjectPath,
+      });
+
+      if (loadedSnapshot.projectRoot) {
+        navigate({ layer: 'project', projectPath: loadedSnapshot.projectRoot });
+      }
+    } catch (error) {
+      setLoadError(formatWorkspaceError(error, 'Failed to open workspace.'));
+    } finally {
+      setLoadingProjectPath(null);
+    }
+  }
+
+  async function openWorkspaceDialog() {
+    try {
+      const selected = await pickProjectFolder(snapshot?.projectRoot ?? recentProjects[0]?.path);
+      if (selected) {
+        await loadAndActivateProject(selected);
+      }
+    } catch (error) {
+      setLoadError(formatWorkspaceError(error, 'Failed to open workspace picker.'));
+    }
+  }
+
+  async function openLegacyProjectDialog() {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog');
       const selected = await open({
         filters: [{ name: 'LocalTeam Config', extensions: ['json'] }],
-        title: 'Open LocalTeam Project',
+        title: 'Open LocalTeam Config',
       });
       if (typeof selected === 'string') {
-        const dir = selected.replace(/[/\\]localteam\.json$/, '');
-        await callSidecar('v1.project.load', { rootPath: dir });
+        await loadAndActivateProject(selected);
       }
-    } catch (e) {
-      console.error('Failed to open project:', e);
+    } catch (error) {
+      setLoadError(formatWorkspaceError(error, 'Failed to open legacy config.'));
     }
   }
 
@@ -111,6 +142,15 @@ export function GlobalView(): React.ReactElement {
     gap: '10px',
   };
 
+  const openActionStyle: React.CSSProperties = {
+    fontSize: '10px',
+    color: 'var(--text-muted)',
+    background: 'transparent',
+    border: '1px solid var(--border)',
+    padding: '4px 8px',
+    cursor: loadingProjectPath ? 'not-allowed' : 'pointer',
+  };
+
   function getCardDotColor(project: RecentProject): string {
     if (!snapshot || snapshot.projectRoot !== project.path) return '#6b7280';
     const statuses = snapshot.agentStatuses;
@@ -137,7 +177,7 @@ export function GlobalView(): React.ReactElement {
     }
     const teams = snapshot.config?.team ? 1 : 0;
     const agents = snapshot.agentStatuses.length;
-    const running = snapshot.tasks.filter((t) => t.status === 'in_progress').length;
+    const running = countActiveRequestTasks(snapshot.tasks);
     return { teams, agents, running };
   }
 
@@ -267,7 +307,11 @@ export function GlobalView(): React.ReactElement {
               style={cardStyle}
               onMouseEnter={() => setHoveredPath(project.path)}
               onMouseLeave={() => setHoveredPath(null)}
-              onClick={() => navigate({ layer: 'project', projectPath: project.path })}
+              onClick={() => {
+                if (!loadingProjectPath) {
+                  void loadAndActivateProject(project.path);
+                }
+              }}
             >
               {/* Status dot + name */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
@@ -360,12 +404,10 @@ export function GlobalView(): React.ReactElement {
 
         {/* Add project card */}
         <div
-          onClick={openProjectDialog}
           style={{
             background: 'var(--bg-panel)',
             border: `var(--border-width) dashed var(--border)`,
             padding: '16px',
-            cursor: 'pointer',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
@@ -376,12 +418,46 @@ export function GlobalView(): React.ReactElement {
           }}
         >
           <div style={{ fontSize: '20px', color: 'var(--text-muted)' }}>+</div>
-          <div style={{ fontSize: '12px', fontWeight: 600 }}>Open Project</div>
+          <div style={{ fontSize: '12px', fontWeight: 600 }}>Open Workspace</div>
           <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center' }}>
-            Browse for localteam.json
+            Choose the git repository folder LocalTeam should operate against
+          </div>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
+            <button
+              type="button"
+              style={openActionStyle}
+              onClick={() => {
+                void openWorkspaceDialog();
+              }}
+              disabled={Boolean(loadingProjectPath)}
+            >
+              {loadingProjectPath ? 'Opening…' : 'Choose Folder'}
+            </button>
+            <button
+              type="button"
+              style={openActionStyle}
+              onClick={() => {
+                void openLegacyProjectDialog();
+              }}
+              disabled={Boolean(loadingProjectPath)}
+            >
+              Use localteam.json
+            </button>
           </div>
         </div>
       </div>
+
+      {loadError && (
+        <div
+          style={{
+            marginTop: '12px',
+            fontSize: '11px',
+            color: 'var(--red)',
+          }}
+        >
+          {loadError}
+        </div>
+      )}
     </div>
   );
 }

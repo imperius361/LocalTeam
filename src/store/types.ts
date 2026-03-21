@@ -1,4 +1,4 @@
 export type {
   ProjectSnapshot, AgentStatus, Task, AgentMessage,
-  ConsensusState, RecentProject
+  ConsensusState, MessageStreamDelta, RecentProject
 } from '../lib/contracts';

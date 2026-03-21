@@ -91,7 +91,11 @@ export class ProjectDatabase {
         session_id TEXT,
         consensus_state TEXT,
         sandbox_path TEXT,
-        sandbox_diff_stat TEXT
+        sandbox_diff_stat TEXT,
+        origin TEXT NOT NULL DEFAULT 'user_request',
+        created_by_agent_id TEXT,
+        manager_agent_id TEXT,
+        review_summary_json TEXT
       );
 
       CREATE TABLE IF NOT EXISTS messages (
@@ -138,6 +142,8 @@ export class ProjectDatabase {
         policy_json TEXT NOT NULL
       );
     `);
+
+    this.ensureTaskSchema();
   }
 
   async loadState(): Promise<PersistedState> {
@@ -163,7 +169,8 @@ export class ProjectDatabase {
       .exec(`
         SELECT id, title, description, status, assigned_agents, parent_task_id,
                created_at, updated_at, token_estimate, session_id, consensus_state,
-               sandbox_path, sandbox_diff_stat
+               sandbox_path, sandbox_diff_stat, origin, created_by_agent_id,
+               manager_agent_id, review_summary_json
         FROM tasks
         ORDER BY created_at ASC
       `)
@@ -184,6 +191,16 @@ export class ProjectDatabase {
             : undefined,
           sandboxPath: row[11] ? String(row[11]) : undefined,
           sandboxDiffStat: row[12] ? String(row[12]) : undefined,
+          origin: row[13]
+            ? (String(row[13]) as Task['origin'])
+            : row[5]
+              ? 'agent_subtask'
+              : 'user_request',
+          createdByAgentId: row[14] ? String(row[14]) : undefined,
+          managerAgentId: row[15] ? String(row[15]) : undefined,
+          reviewSummary: row[16]
+            ? (JSON.parse(String(row[16])) as Task['reviewSummary'])
+            : undefined,
         }))
       );
 
@@ -289,8 +306,9 @@ export class ProjectDatabase {
       `
         INSERT OR REPLACE INTO tasks
         (id, title, description, status, assigned_agents, parent_task_id, created_at,
-         updated_at, token_estimate, session_id, consensus_state, sandbox_path, sandbox_diff_stat)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         updated_at, token_estimate, session_id, consensus_state, sandbox_path, sandbox_diff_stat,
+         origin, created_by_agent_id, manager_agent_id, review_summary_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
       [
         task.id,
@@ -306,9 +324,38 @@ export class ProjectDatabase {
         task.consensusState ?? null,
         task.sandboxPath ?? null,
         task.sandboxDiffStat ?? null,
+        task.origin,
+        task.createdByAgentId ?? null,
+        task.managerAgentId ?? null,
+        task.reviewSummary ? JSON.stringify(task.reviewSummary) : null,
       ],
     );
     await this.flush();
+  }
+
+  private ensureTaskSchema(): void {
+    const taskColumns = new Set(
+      this.db
+        .exec('PRAGMA table_info(tasks)')
+        .flatMap((result: QueryResult) =>
+          result.values.map((row: unknown[]) => String(row[1])),
+        ),
+    );
+
+    if (!taskColumns.has('origin')) {
+      this.db.run(
+        "ALTER TABLE tasks ADD COLUMN origin TEXT NOT NULL DEFAULT 'user_request'",
+      );
+    }
+    if (!taskColumns.has('created_by_agent_id')) {
+      this.db.run('ALTER TABLE tasks ADD COLUMN created_by_agent_id TEXT');
+    }
+    if (!taskColumns.has('manager_agent_id')) {
+      this.db.run('ALTER TABLE tasks ADD COLUMN manager_agent_id TEXT');
+    }
+    if (!taskColumns.has('review_summary_json')) {
+      this.db.run('ALTER TABLE tasks ADD COLUMN review_summary_json TEXT');
+    }
   }
 
   async saveMessage(message: AgentMessage): Promise<void> {

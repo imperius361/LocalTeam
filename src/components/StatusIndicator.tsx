@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from '../lib/contracts';
+import { countActiveRequestTasks } from '../lib/taskSelectors';
 
 interface StatusIndicatorProps {
   snapshot: ProjectSnapshot | null;
@@ -16,7 +17,7 @@ export function StatusIndicator({
       ['thinking', 'writing', 'waiting_for_consensus'].includes(agent.status),
     ).length ?? 0;
   const activeTasks =
-    snapshot?.tasks.filter((task) => task.status === 'in_progress').length ?? 0;
+    snapshot ? countActiveRequestTasks(snapshot.tasks) : 0;
   const sandboxMode = snapshot?.config?.sandbox.defaultMode ?? 'direct';
 
   return (

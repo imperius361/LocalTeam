@@ -11,6 +11,7 @@ describe('TaskManager', () => {
     expect(task.status).toBe('pending');
     expect(task.id).toBeTruthy();
     expect(task.assignedAgents).toEqual([]);
+    expect(task.origin).toBe('user_request');
   });
 
   it('retrieves a task by id', () => {
@@ -67,6 +68,18 @@ describe('TaskManager', () => {
     const child = manager.createSubtask(parent.id, 'Child', 'Child desc');
 
     expect(child.parentTaskId).toBe(parent.id);
+    expect(child.origin).toBe('agent_subtask');
+  });
+
+  it('allows review tasks to be cancelled', () => {
+    const manager = new TaskManager();
+    const task = manager.create('Task', 'Desc');
+
+    manager.transition(task.id, 'in_progress');
+    manager.transition(task.id, 'review');
+    manager.transition(task.id, 'cancelled');
+
+    expect(manager.get(task.id)!.status).toBe('cancelled');
   });
 
   it('lists all tasks', () => {

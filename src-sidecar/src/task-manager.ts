@@ -2,10 +2,11 @@ import { randomUUID } from 'node:crypto';
 import type { Task, TaskStatus } from './types.js';
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  pending: ['in_progress'],
-  in_progress: ['review', 'completed'],
-  review: ['completed', 'in_progress'],
+  pending: ['in_progress', 'cancelled'],
+  in_progress: ['review', 'completed', 'cancelled'],
+  review: ['completed', 'in_progress', 'cancelled'],
   completed: [],
+  cancelled: [],
 };
 
 export class TaskManager {
@@ -35,6 +36,10 @@ export class TaskManager {
       consensusState: overrides.consensusState,
       sandboxPath: overrides.sandboxPath,
       sandboxDiffStat: overrides.sandboxDiffStat,
+      origin: overrides.origin ?? (overrides.parentTaskId ? 'agent_subtask' : 'user_request'),
+      createdByAgentId: overrides.createdByAgentId,
+      managerAgentId: overrides.managerAgentId,
+      reviewSummary: overrides.reviewSummary,
     };
     this.tasks.set(task.id, task);
     return { ...task };

@@ -78,6 +78,19 @@ describe('Sidecar IPC E2E', () => {
     }
   });
 
+  it('returns online status before any project is loaded', async () => {
+    const sidecar = await spawnSidecar();
+    try {
+      sidecar.send({ id: 'status-1', method: 'v1.status', params: {} });
+      const res = await sidecar.receive() as any;
+      expect(res.id).toBe('status-1');
+      expect(res.result.projectRoot).toBeNull();
+      expect(res.result.sidecar.ready).toBe(true);
+    } finally {
+      sidecar.kill();
+    }
+  });
+
   it('unknown method returns error', async () => {
     const sidecar = await spawnSidecar();
     try {

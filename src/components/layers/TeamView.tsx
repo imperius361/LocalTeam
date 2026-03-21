@@ -1,281 +1,173 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  ReactFlow,
-  Node,
-  Edge,
   Background,
   Controls,
-  useNodesState,
-  useEdgesState,
   Handle,
   Position,
+  ReactFlow,
+  type Edge,
+  type Node,
   type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';
-import { StatusBadge } from '../common/StatusBadge';
-import { ProgressBar } from '../common/ProgressBar';
+import { respondToTaskReview } from '../../lib/ipc';
+import type { AgentStatus } from '../../lib/contracts';
+import { buildTaskTreeRows } from '../../lib/taskSelectors';
+import { buildTeamFlowGraph } from '../../lib/teamFlow';
+import { ManagerReviewPanel } from '../team/ManagerReviewPanel';
+import { TaskHierarchyPanel } from '../team/TaskHierarchyPanel';
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface AgentNodeData extends Record<string, unknown> {
-  agentId: string;
-  role: string;
-  model: string;
-  provider: string;
-  status: 'idle' | 'thinking' | 'writing' | 'waiting_for_consensus' | 'unavailable';
-  hasCredentials: boolean;
-  tokenEstimate: number;
-  onNavigate: (agentId: string) => void;
+interface FlowNodeData extends Record<string, unknown> {
+  id: string;
+  label: string;
+  kind: 'user' | 'manager' | 'agent';
+  status?: AgentStatus['status'];
+  onNavigate?: (agentId: string) => void;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function formatTime(ts: number): string {
-  const d = new Date(ts);
-  return [d.getHours(), d.getMinutes(), d.getSeconds()]
-    .map((n) => String(n).padStart(2, '0'))
-    .join(':');
-}
-
-function initials(role: string): string {
-  return role
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((w) => w[0] ?? '')
-    .join('')
-    .toUpperCase();
-}
-
-const TYPE_COLORS: Record<string, string> = {
-  proposal: 'var(--cyan)',
-  objection: 'var(--red)',
-  consensus: 'var(--green)',
-  discussion: 'var(--text-muted)',
-  system: 'var(--text-muted)',
-  artifact: 'var(--yellow)',
-  user: 'var(--accent)',
-};
-
-// ── AgentNode ─────────────────────────────────────────────────────────────────
-
-function AgentNode({ data }: NodeProps<Node<AgentNodeData>>): React.ReactElement {
-  const { agentId, role, status, tokenEstimate, onNavigate } = data;
-  const isActive = status !== 'idle';
-  const isError = status === 'unavailable';
-
-  const containerStyle: React.CSSProperties = {
-    background: 'var(--bg-panel)',
-    border: `1px solid ${isError ? 'var(--red)' : 'var(--border)'}`,
-    padding: '12px 14px',
-    width: 160,
-    cursor: 'pointer',
-    boxSizing: 'border-box',
-    ...(isActive
-      ? { boxShadow: '0 0 0 1px var(--accent), 0 4px 16px rgba(88,101,242,0.2)' }
-      : {}),
-  };
+function FlowNode({ data }: NodeProps<Node<FlowNodeData>>): React.ReactElement {
+  const borderColor =
+    data.kind === 'user'
+      ? 'var(--accent)'
+      : data.kind === 'manager'
+        ? 'var(--yellow)'
+        : 'var(--border)';
+  const canNavigate = data.kind !== 'user' && typeof data.onNavigate === 'function';
 
   return (
-    <div style={containerStyle} onClick={() => onNavigate(agentId)}>
-      <Handle type="target" position={Position.Top} />
-
-      {/* Header: avatar + role */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <div
-          style={{
-            width: 26,
-            height: 26,
-            background: 'var(--accent-dim)',
-            border: '1px solid var(--accent)',
-            color: 'var(--accent)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 10,
-            fontWeight: 700,
-            flexShrink: 0,
-          }}
-        >
-          {initials(role)}
-        </div>
-        <div
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            color: 'var(--text-primary)',
-          }}
-        >
-          {role}
-        </div>
+    <div
+      onClick={() => {
+        if (canNavigate) {
+          data.onNavigate?.(data.id);
+        }
+      }}
+      style={{
+        minWidth: 150,
+        background: 'var(--bg-panel)',
+        border: `1px solid ${borderColor}`,
+        padding: '10px 12px',
+        color: 'var(--text-primary)',
+        cursor: canNavigate ? 'pointer' : 'default',
+      }}
+    >
+      <Handle type="target" position={Position.Left} />
+      <div
+        style={{
+          fontSize: 10,
+          textTransform: 'uppercase',
+          letterSpacing: '1px',
+          color: 'var(--text-muted)',
+          marginBottom: 4,
+        }}
+      >
+        {data.kind}
       </div>
-
-      {/* Status badge */}
-      <div style={{ marginBottom: 8 }}>
-        <StatusBadge status={status} />
-      </div>
-
-      {/* Token bar */}
-      <ProgressBar value={Math.min((tokenEstimate / 6000) * 100, 100)} />
-
-      <Handle type="source" position={Position.Bottom} />
+      <div style={{ fontSize: 12, marginBottom: 4 }}>{data.label}</div>
+      {data.status && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{data.status}</div>
+      )}
+      <Handle type="source" position={Position.Right} />
     </div>
   );
 }
 
-const nodeTypes = { agentNode: AgentNode };
-
-// ── Layout helpers ────────────────────────────────────────────────────────────
-
-function buildLayout(
-  agentStatuses: Array<{
-    agentId: string;
-    role: string;
-    model: string;
-    provider: string;
-    status: 'idle' | 'thinking' | 'writing' | 'waiting_for_consensus' | 'unavailable';
-    hasCredentials: boolean;
-  }>,
-  onNavigate: (id: string) => void,
-): Node[] {
-  const count = agentStatuses.length;
-  if (count === 0) return [];
-
-  const yBase = 200;
-  const spacing = 250;
-
-  // Compute x start so agents are centered around x=400
-  const totalWidth = (count - 1) * spacing;
-  const xStart = 400 - totalWidth / 2;
-
-  return agentStatuses.map((a, i) => ({
-    id: a.agentId,
-    type: 'agentNode',
-    position: { x: xStart + i * spacing, y: yBase },
-    data: {
-      agentId: a.agentId,
-      role: a.role,
-      model: a.model,
-      provider: a.provider,
-      status: a.status,
-      hasCredentials: a.hasCredentials,
-      tokenEstimate: 0,
-      onNavigate,
-    } satisfies AgentNodeData,
-  }));
-}
-
-function buildEdges(
-  messages: Array<{ id: string; agentId: string; type: string; taskId?: string }>,
-  agentIds: string[],
-  animated: boolean,
-): Edge[] {
-  const taskMessages = messages.filter(
-    (m) =>
-      m.taskId &&
-      (m.type === 'proposal' || m.type === 'objection' || m.type === 'discussion'),
-  );
-
-  if (taskMessages.length === 0 || agentIds.length < 2) return [];
-
-  const seen = new Set<string>();
-  const edges: Edge[] = [];
-
-  for (const msg of taskMessages) {
-    const srcIdx = agentIds.indexOf(msg.agentId);
-    if (srcIdx === -1) continue;
-    const tgtIdx = (srcIdx + 1) % agentIds.length;
-    const key = `${agentIds[srcIdx]}->${agentIds[tgtIdx]}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    edges.push({
-      id: key,
-      source: agentIds[srcIdx],
-      target: agentIds[tgtIdx],
-      animated,
-    });
-  }
-
-  return edges;
-}
-
-// ── TeamView ──────────────────────────────────────────────────────────────────
+const nodeTypes = { flowNode: FlowNode };
 
 export function TeamView(): React.ReactElement {
   const { navState, navigate } = useNav();
   const snapshot = useAppStore((s) => s.snapshot);
+  const liveMessageDeltas = useAppStore((s) => s.liveMessageDeltas);
+  const setSnapshot = useAppStore((s) => s.setSnapshot);
 
   const projectPath = navState.layer === 'team' ? navState.projectPath : '';
   const teamId = navState.layer === 'team' ? navState.teamId : '';
 
-  const agentStatuses = snapshot?.agentStatuses ?? [];
-  const messages = snapshot?.messages ?? [];
-  const consensus = snapshot?.consensus ?? [];
-
-  const isAnyActive = agentStatuses.some((a) => a.status !== 'idle');
-
-  const handleNavigate = useCallback(
-    (agentId: string) => {
-      navigate({ layer: 'agent', projectPath, teamId, agentId });
-    },
-    [navigate, projectPath, teamId],
+  const tasks = snapshot?.tasks ?? [];
+  const taskRows = buildTaskTreeRows(tasks);
+  const [selectedRootTaskId, setSelectedRootTaskId] = useState<string | null>(
+    taskRows[0]?.task.id ?? null,
   );
-
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
+  const [busyAction, setBusyAction] = useState<'approve' | 'modify' | 'reject' | null>(null);
+  const [modifyDraft, setModifyDraft] = useState('');
+  const [reviewError, setReviewError] = useState<string | null>(null);
 
   useEffect(() => {
-    const agentIds = agentStatuses.map((a) => a.agentId);
-    const newNodes = buildLayout(agentStatuses, handleNavigate);
-
-    // Consensus node
-    if (consensus.length > 0 && consensus.some((c) => c.status !== 'reached')) {
-      const lastX =
-        newNodes.length > 0
-          ? Math.max(...newNodes.map((n) => n.position.x))
-          : 400;
-      const supporters = consensus[0]?.supporters ?? [];
-      newNodes.push({
-        id: 'consensus',
-        type: 'default',
-        position: { x: lastX + 250, y: 200 },
-        data: { label: `Consensus\n${supporters.length}/${agentStatuses.length}` },
-      });
+    if (!taskRows.some((row) => row.depth === 0 && row.task.id === selectedRootTaskId)) {
+      setSelectedRootTaskId(taskRows[0]?.task.id ?? null);
     }
+  }, [selectedRootTaskId, taskRows]);
 
-    const newEdges = buildEdges(messages, agentIds, isAnyActive);
+  const selectedRootTask =
+    taskRows.find((row) => row.depth === 0 && row.task.id === selectedRootTaskId)?.task ?? null;
+  const flowGraph = buildTeamFlowGraph({
+    tasks,
+    messages: snapshot?.messages ?? [],
+    liveMessageDeltas,
+    agentStatuses: snapshot?.agentStatuses ?? [],
+    selectedTaskId: selectedRootTaskId,
+  });
 
-    setNodes(newNodes);
-    setEdges(newEdges);
-  }, [agentStatuses, messages, consensus, isAnyActive, handleNavigate]);
+  const agentRoleById = Object.fromEntries(
+    (snapshot?.agentStatuses ?? []).map((agent) => [agent.agentId, agent.role]),
+  );
+  const managerRole = selectedRootTask?.managerAgentId
+    ? agentRoleById[selectedRootTask.managerAgentId]
+    : undefined;
 
-  // Activity panel: last 10 messages newest-first
-  const recentMessages = [...messages]
-    .sort((a, b) => b.timestamp - a.timestamp)
+  const nodes = buildFlowNodes(flowGraph.nodes, (agentId) => {
+    navigate({ layer: 'agent', projectPath, teamId, agentId });
+  });
+  const edges = buildFlowEdges(flowGraph.edges);
+
+  const relevantTaskIds = new Set<string>();
+  if (selectedRootTaskId) {
+    relevantTaskIds.add(selectedRootTaskId);
+    tasks
+      .filter((task) => task.parentTaskId === selectedRootTaskId)
+      .forEach((task) => relevantTaskIds.add(task.id));
+  }
+  const activity = (snapshot?.messages ?? [])
+    .filter((message) => message.taskId && relevantTaskIds.has(message.taskId))
+    .sort((left, right) => right.timestamp - left.timestamp)
     .slice(0, 10);
 
-  const sectionHeader: React.CSSProperties = {
-    fontSize: 9,
-    textTransform: 'uppercase',
-    letterSpacing: '2px',
-    color: 'var(--text-muted)',
-    marginBottom: 8,
-    flexShrink: 0,
-  };
+  async function handleReviewAction(action: 'approve' | 'modify' | 'reject') {
+    if (!selectedRootTask) {
+      return;
+    }
+
+    setBusyAction(action);
+    setReviewError(null);
+    try {
+      const nextSnapshot = await respondToTaskReview(
+        selectedRootTask.id,
+        action,
+        action === 'modify' ? modifyDraft.trim() : undefined,
+      );
+      setSnapshot(nextSnapshot);
+      if (action !== 'modify') {
+        setModifyDraft('');
+      }
+    } catch (error) {
+      setReviewError(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : 'Review action failed.',
+      );
+    } finally {
+      setBusyAction(null);
+    }
+  }
 
   return (
-    <div style={{ display: 'flex', flex: 1, height: '100%', overflow: 'hidden' }}>
-      {/* Graph canvas */}
-      <div style={{ flex: 1, background: 'var(--bg-base)', position: 'relative', height: '100%' }}>
+    <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg-base)' }}>
+      <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid var(--border)' }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
           nodeTypes={nodeTypes}
           fitView
           style={{ height: '100%', width: '100%' }}
@@ -285,64 +177,165 @@ export function TeamView(): React.ReactElement {
         </ReactFlow>
       </div>
 
-      {/* Activity panel */}
       <div
         style={{
-          width: 200,
+          width: 420,
           flexShrink: 0,
-          background: 'var(--bg-panel)',
-          borderLeft: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
-          padding: '12px 10px',
-          overflow: 'hidden',
+          gap: 12,
+          padding: 12,
           boxSizing: 'border-box',
+          overflowY: 'auto',
         }}
       >
-        <div style={sectionHeader}>Activity</div>
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {recentMessages.length === 0 ? (
-            <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>No activity yet</div>
-          ) : (
-            recentMessages.map((msg) => {
-              const badgeColor = TYPE_COLORS[msg.type] ?? 'var(--text-muted)';
-              const truncated =
-                msg.content.length > 60 ? msg.content.slice(0, 60) + '…' : msg.content;
-              return (
+        <TaskHierarchyPanel
+          rows={taskRows}
+          selectedRootTaskId={selectedRootTaskId}
+          agentRoleById={agentRoleById}
+          onSelectRootTask={setSelectedRootTaskId}
+        />
+
+        <ManagerReviewPanel
+          task={selectedRootTask}
+          managerRole={managerRole}
+          busyAction={busyAction}
+          error={reviewError}
+          modifyDraft={modifyDraft}
+          onModifyDraftChange={setModifyDraft}
+          onApprove={() => {
+            void handleReviewAction('approve');
+          }}
+          onModify={() => {
+            void handleReviewAction('modify');
+          }}
+          onReject={() => {
+            void handleReviewAction('reject');
+          }}
+        />
+
+        <section style={{ minHeight: 0 }}>
+          <div
+            style={{
+              fontSize: 9,
+              textTransform: 'uppercase',
+              letterSpacing: '2px',
+              color: 'var(--text-muted)',
+              marginBottom: 8,
+            }}
+          >
+            Activity
+          </div>
+          <div
+            style={{
+              border: '1px solid var(--border)',
+              background: 'var(--bg-panel)',
+              minHeight: 120,
+              maxHeight: 260,
+              overflowY: 'auto',
+            }}
+          >
+            {activity.length === 0 ? (
+              <div style={{ padding: 12, fontSize: 11, color: 'var(--text-muted)' }}>
+                No activity for the selected request yet.
+              </div>
+            ) : (
+              activity.map((message) => (
                 <div
-                  key={msg.id}
+                  key={message.id}
                   style={{
-                    fontSize: 10,
-                    lineHeight: 1.4,
+                    padding: '10px 12px',
                     borderBottom: '1px solid var(--border)',
-                    paddingBottom: 4,
                   }}
                 >
-                  <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 2, flexWrap: 'wrap' }}>
-                    <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', flexShrink: 0 }}>
-                      {formatTime(msg.timestamp)}
-                    </span>
-                    <span
-                      style={{
-                        color: badgeColor,
-                        textTransform: 'uppercase',
-                        fontSize: 8,
-                        letterSpacing: '1px',
-                        flexShrink: 0,
-                      }}
-                    >
-                      {msg.type}
-                    </span>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>
+                    {message.agentRole} • {message.type}
                   </div>
-                  <div style={{ color: 'var(--text-secondary)', wordBreak: 'break-word' }}>
-                    {truncated}
+                  <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
+                    {message.content}
                   </div>
                 </div>
-              );
-            })
-          )}
-        </div>
+              ))
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
+}
+
+function buildFlowNodes(
+  nodes: Array<{ id: string; label: string; kind: 'user' | 'manager' | 'agent'; status?: AgentStatus['status'] }>,
+  onNavigate: (agentId: string) => void,
+): Node[] {
+  const userNode = nodes.find((node) => node.kind === 'user');
+  const managerNode = nodes.find((node) => node.kind === 'manager');
+  const agentNodes = nodes.filter((node) => node.kind === 'agent');
+
+  const reactNodes: Node[] = [];
+  if (userNode) {
+    reactNodes.push({
+      id: userNode.id,
+      type: 'flowNode',
+      position: { x: 40, y: 220 },
+      data: { ...userNode, onNavigate } satisfies FlowNodeData,
+    });
+  }
+  if (managerNode) {
+    reactNodes.push({
+      id: managerNode.id,
+      type: 'flowNode',
+      position: { x: 300, y: 220 },
+      data: { ...managerNode, onNavigate } satisfies FlowNodeData,
+    });
+  }
+
+  const yStart = 80;
+  const step = 140;
+  for (const [index, node] of agentNodes.entries()) {
+    reactNodes.push({
+      id: node.id,
+      type: 'flowNode',
+      position: { x: 580, y: yStart + index * step },
+      data: { ...node, onNavigate } satisfies FlowNodeData,
+    });
+  }
+
+  return reactNodes;
+}
+
+function buildFlowEdges(
+  edges: Array<{ id: string; source: string; target: string; label: string; phase: string; animated: boolean }>,
+): Edge[] {
+  return edges.map((edge) => ({
+    id: edge.id,
+    source: edge.source,
+    target: edge.target,
+    animated: edge.animated,
+    label: edge.label,
+    type: 'smoothstep',
+    style: {
+      stroke: getEdgeColor(edge.phase),
+      strokeWidth: 1.5,
+    },
+    labelStyle: {
+      fill: 'var(--text-muted)',
+      fontSize: 10,
+    },
+  }));
+}
+
+function getEdgeColor(phase: string): string {
+  switch (phase) {
+    case 'request':
+      return 'var(--accent)';
+    case 'planning':
+      return 'var(--cyan)';
+    case 'review':
+      return 'var(--yellow)';
+    case 'execution':
+      return 'var(--green)';
+    default:
+      return 'var(--border)';
+  }
 }

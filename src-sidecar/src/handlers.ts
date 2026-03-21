@@ -90,6 +90,44 @@ export function createHandlers(
           result: await runtime.interjectTask(req.params.taskId, req.params.guidance),
         };
       }
+      case 'v1.task.review.respond': {
+        if (typeof req.params.taskId !== 'string' || !req.params.taskId) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: taskId' },
+          };
+        }
+        if (
+          req.params.action !== 'approve' &&
+          req.params.action !== 'modify' &&
+          req.params.action !== 'reject'
+        ) {
+          return {
+            id: req.id,
+            error: {
+              code: -3,
+              message: 'Invalid param: action must be approve|modify|reject',
+            },
+          };
+        }
+        if (
+          req.params.action === 'modify' &&
+          (typeof req.params.guidance !== 'string' || !req.params.guidance.trim())
+        ) {
+          return {
+            id: req.id,
+            error: { code: -3, message: 'Missing required param: guidance' },
+          };
+        }
+        return {
+          id: req.id,
+          result: await runtime.respondToTaskReview(
+            req.params.taskId,
+            req.params.action,
+            typeof req.params.guidance === 'string' ? req.params.guidance : undefined,
+          ),
+        };
+      }
       case 'list_tasks':
       case 'v1.task.list':
         return { id: req.id, result: await runtime.listTasks() };

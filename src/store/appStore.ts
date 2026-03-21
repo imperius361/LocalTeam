@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type {
   ProjectSnapshot, AgentStatus, Task, AgentMessage,
-  RecentProject
+  MessageStreamDelta, RecentProject
 } from './types';
 
 const RECENTS_KEY = 'localteam.recents';
@@ -19,15 +19,62 @@ interface AppStore {
   agentStatusMap: Record<string, AgentStatus>;   // agentId → status
   taskMap: Record<string, Task>;                  // taskId → task
   messagesByTask: Record<string, AgentMessage[]>; // taskId → messages[]
+  liveMessageDeltas: Record<string, MessageStreamDelta>; // messageId -> delta
 
   // Actions
   setSnapshot: (s: ProjectSnapshot) => void;
+  patchSnapshot: (
+    updater: (snapshot: ProjectSnapshot | null) => ProjectSnapshot | null,
+  ) => void;
   upsertAgentStatus: (s: AgentStatus) => void;
   upsertTask: (t: Task) => void;
   appendMessage: (m: AgentMessage) => void;
+  upsertLiveMessageDelta: (delta: MessageStreamDelta) => void;
+  finalizeLiveMessageDelta: (messageId: string) => void;
   addRecentProject: (p: RecentProject) => void;
   loadRecents: () => void;
   setActiveProjectPath: (path: string | null) => void;
+}
+
+function buildSnapshotState(snapshot: ProjectSnapshot | null) {
+  if (!snapshot) {
+    return {
+      snapshot: null,
+      activeProjectPath: null,
+      agentStatusMap: {},
+      taskMap: {},
+      messagesByTask: {},
+      liveMessageDeltas: {},
+    };
+  }
+
+  const agentStatusMap: Record<string, AgentStatus> = {};
+  for (const status of snapshot.agentStatuses) {
+    agentStatusMap[status.agentId] = status;
+  }
+
+  const taskMap: Record<string, Task> = {};
+  for (const task of snapshot.tasks) {
+    taskMap[task.id] = task;
+  }
+
+  const messagesByTask: Record<string, AgentMessage[]> = {};
+  for (const msg of snapshot.messages) {
+    const key = msg.taskId ?? '';
+    if (!messagesByTask[key]) {
+      messagesByTask[key] = [];
+    }
+    messagesByTask[key].push(msg);
+  }
+
+  return {
+    snapshot,
+    activeProjectPath: snapshot.projectRoot,
+    agentStatusMap,
+    taskMap,
+    messagesByTask,
+    liveMessageDeltas: {},
+  };
 }
 
 export const useAppStore = create<AppStore>()((set, get) => ({
@@ -37,28 +84,15 @@ export const useAppStore = create<AppStore>()((set, get) => ({
   agentStatusMap: {},
   taskMap: {},
   messagesByTask: {},
+  liveMessageDeltas: {},
 
   setSnapshot: (s: ProjectSnapshot) => {
-    const agentStatusMap: Record<string, AgentStatus> = {};
-    for (const status of s.agentStatuses) {
-      agentStatusMap[status.agentId] = status;
-    }
+    set(buildSnapshotState(s));
+  },
 
-    const taskMap: Record<string, Task> = {};
-    for (const task of s.tasks) {
-      taskMap[task.id] = task;
-    }
-
-    const messagesByTask: Record<string, AgentMessage[]> = {};
-    for (const msg of s.messages) {
-      const key = msg.taskId ?? '';
-      if (!messagesByTask[key]) {
-        messagesByTask[key] = [];
-      }
-      messagesByTask[key].push(msg);
-    }
-
-    set({ snapshot: s, agentStatusMap, taskMap, messagesByTask });
+  patchSnapshot: (updater) => {
+    const nextSnapshot = updater(get().snapshot);
+    set(buildSnapshotState(nextSnapshot));
   },
 
   upsertAgentStatus: (s: AgentStatus) => {
@@ -102,18 +136,45 @@ export const useAppStore = create<AppStore>()((set, get) => ({
   },
 
   appendMessage: (m: AgentMessage) => {
-    const { snapshot, messagesByTask } = get();
+    const { snapshot, messagesByTask, liveMessageDeltas } = get();
 
     const key = m.taskId ?? '';
     const existing = messagesByTask[key] ?? [];
     const newMessagesByTask = { ...messagesByTask, [key]: [...existing, m] };
+    const newLiveMessageDeltas = { ...liveMessageDeltas };
+    delete newLiveMessageDeltas[m.id];
 
     let newSnapshot = snapshot;
     if (snapshot) {
       newSnapshot = { ...snapshot, messages: [...snapshot.messages, m] };
     }
 
-    set({ messagesByTask: newMessagesByTask, snapshot: newSnapshot });
+    set({
+      messagesByTask: newMessagesByTask,
+      liveMessageDeltas: newLiveMessageDeltas,
+      snapshot: newSnapshot,
+    });
+  },
+
+  upsertLiveMessageDelta: (delta: MessageStreamDelta) => {
+    set((state) => ({
+      liveMessageDeltas: {
+        ...state.liveMessageDeltas,
+        [delta.messageId]: delta,
+      },
+    }));
+  },
+
+  finalizeLiveMessageDelta: (messageId: string) => {
+    set((state) => {
+      if (!state.liveMessageDeltas[messageId]) {
+        return state;
+      }
+
+      const next = { ...state.liveMessageDeltas };
+      delete next[messageId];
+      return { liveMessageDeltas: next };
+    });
   },
 
   addRecentProject: (p: RecentProject) => {

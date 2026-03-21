@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';
 import { callSidecar } from '../../lib/ipc';
+import { countActiveRequestTasks } from '../../lib/taskSelectors';
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
@@ -37,7 +38,7 @@ export function ProjectView(): React.ReactElement {
   const messages = snapshot?.messages ?? [];
   const team = snapshot?.config?.team ?? null;
 
-  const activeTasks = tasks.filter((t) => t.status === 'in_progress').length;
+  const activeTasks = countActiveRequestTasks(tasks);
 
   const sortedMessages = [...messages]
     .sort((a, b) => b.timestamp - a.timestamp)

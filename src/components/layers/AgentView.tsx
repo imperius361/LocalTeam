@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';
-import { callSidecar, restartSidecar } from '../../lib/ipc';
+import { restartSidecar } from '../../lib/ipc';
 import { StatusBadge } from '../common/StatusBadge';
 import { ProgressBar } from '../common/ProgressBar';
 
@@ -85,8 +85,6 @@ export function AgentView(): React.ReactElement {
   const agentId = navState.layer === 'agent' ? navState.agentId : '';
 
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
-  const [showInjection, setShowInjection] = useState(false);
-  const [injectionText, setInjectionText] = useState('');
   const [activeTab, setActiveTab] = useState<'live' | 'ipc' | 'stderr'>('live');
 
   const agentStatus = agentStatusMap[agentId];
@@ -100,11 +98,20 @@ export function AgentView(): React.ReactElement {
   const uptime = snapshot?.sidecar?.uptime ?? 0;
   const lastError = agentStatus?.lastError ?? 'None';
 
-  // Task groups: in_progress → pending → completed
+  const reviewTasks = agentTasks.filter((t) => t.status === 'review');
+  const cancelledTasks = agentTasks.filter((t) => t.status === 'cancelled');
+
+  // Task groups: in_progress → review → pending → completed → cancelled
   const inProgressTasks = agentTasks.filter((t) => t.status === 'in_progress');
   const pendingTasks = agentTasks.filter((t) => t.status === 'pending');
   const completedTasks = agentTasks.filter((t) => t.status === 'completed');
-  const orderedTasks = [...inProgressTasks, ...pendingTasks, ...completedTasks];
+  const orderedTasks = [
+    ...inProgressTasks,
+    ...reviewTasks,
+    ...pendingTasks,
+    ...completedTasks,
+    ...cancelledTasks,
+  ];
 
   // Active task for message display
   const resolvedTaskId = activeTaskId ?? inProgressTasks[0]?.id ?? orderedTasks[0]?.id ?? '';
@@ -115,16 +122,6 @@ export function AgentView(): React.ReactElement {
   const terminalMessages = [...(snapshot?.messages ?? [])]
     .sort((a, b) => a.timestamp - b.timestamp)
     .slice(-20);
-
-  async function handleInject() {
-    if (!injectionText.trim()) return;
-    try {
-      await callSidecar('v1.task.create', { title: 'Injected', description: injectionText.trim() });
-      setInjectionText('');
-    } catch (err) {
-      console.error('Inject failed:', err);
-    }
-  }
 
   if (!agentStatus) {
     return (
@@ -151,8 +148,7 @@ export function AgentView(): React.ReactElement {
         <StatusBadge status={agentStatus.status} />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
           <button style={btnBase} onClick={() => restartSidecar().catch(console.error)}>Restart</button>
-          <button style={{ ...btnBase, color: 'var(--red)', background: 'rgba(239,68,68,0.06)', border: 'var(--border-width) solid var(--red)' }} onClick={() => window.alert('Stop agent: not yet implemented')}>Stop</button>
-          <button style={{ ...btnBase, color: showInjection ? 'var(--accent)' : 'var(--text-secondary)' }} onClick={() => setShowInjection((v) => !v)}>New Task</button>
+          <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>Read-only view</span>
         </div>
       </div>
 
@@ -199,6 +195,7 @@ export function AgentView(): React.ReactElement {
               orderedTasks.map((task) => {
                 const isActive = task.id === resolvedTaskId;
                 const isInProgress = task.status === 'in_progress';
+                const isReview = task.status === 'review';
                 return (
                   <div
                     key={task.id}
@@ -210,18 +207,29 @@ export function AgentView(): React.ReactElement {
                       borderLeft: isActive ? 'var(--border-width) solid var(--accent)' : 'var(--border-width) solid transparent',
                       background: isActive ? 'var(--bg-raised)' : 'transparent',
                     }}
-                  >
+                    >
                     {/* Status label */}
-                    <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3, color: isInProgress ? 'var(--yellow)' : task.status === 'completed' ? 'var(--green)' : 'var(--text-muted)' }}>
-                      {isInProgress ? '● IN PROGRESS' : task.status === 'completed' ? '✓ DONE' : '○ PENDING'}
+                    <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 3, color: isInProgress ? 'var(--yellow)' : isReview ? 'var(--cyan)' : task.status === 'completed' ? 'var(--green)' : task.status === 'cancelled' ? 'var(--red)' : 'var(--text-muted)' }}>
+                      {isInProgress
+                        ? '● IN PROGRESS'
+                        : isReview
+                          ? '! REVIEW'
+                          : task.status === 'completed'
+                            ? '✓ DONE'
+                            : task.status === 'cancelled'
+                              ? '× CANCELLED'
+                              : '○ PENDING'}
                     </div>
                     {/* Title */}
                     <div className="task-item-title" style={{ fontSize: 12, color: 'var(--text-primary)', marginBottom: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {task.title}
+                      {task.origin === 'agent_subtask' ? '>' : '#'} {task.title}
                     </div>
                     {/* Meta */}
                     <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: isInProgress ? 6 : 0 }}>
-                      {agentStatus.role} · {relativeTime(task.updatedAt)}
+                      {task.origin === 'agent_subtask' && task.createdByAgentId
+                        ? `from ${snapshot?.agentStatuses.find((entry) => entry.agentId === task.createdByAgentId)?.role ?? task.createdByAgentId} · `
+                        : ''}
+                      {relativeTime(task.updatedAt)}
                     </div>
                     {/* Progress bar for in_progress */}
                     {isInProgress && <ProgressBar value={50} color="var(--yellow)" />}
@@ -300,34 +308,6 @@ export function AgentView(): React.ReactElement {
             );
           })}
 
-          {/* Injection bar */}
-          {activeTab === 'live' && showInjection && (
-            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, paddingRight: 8 }}>
-              <input
-                type="text"
-                value={injectionText}
-                onChange={(e) => setInjectionText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleInject(); }}
-                placeholder="Inject prompt → Agent…"
-                style={{
-                  width: 260,
-                  background: 'var(--bg-raised)',
-                  border: '1px solid var(--border)',
-                  color: 'var(--text-primary)',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: 11,
-                  padding: '3px 8px',
-                  outline: 'none',
-                }}
-              />
-              <button
-                onClick={handleInject}
-                style={{ ...btnBase, fontSize: 10 }}
-              >
-                ↵ INJECT
-              </button>
-            </div>
-          )}
         </div>
 
         {/* Terminal body */}

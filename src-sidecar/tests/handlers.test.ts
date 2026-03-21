@@ -54,6 +54,11 @@ describe('Runtime Handlers', () => {
         taskId,
         guidance,
       }),
+      respondToTaskReview: async (taskId: string, action: string, guidance?: string) => ({
+        taskId,
+        action,
+        guidance,
+      }),
       resolveCommandApproval: async (approvalId: string, action: string) => ({
         id: approvalId,
         status: action === 'approve' ? 'completed' : 'denied',
@@ -160,6 +165,26 @@ describe('Runtime Handlers', () => {
     expect(res.result).toEqual({
       taskId: 'task-1',
       guidance: 'Focus on the auth boundary',
+    });
+  });
+
+  it('handles v1.task.review.respond', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.task.review.respond',
+      params: {
+        taskId: 'task-1',
+        action: 'modify',
+        guidance: 'Tighten the auth boundary.',
+      },
+    });
+
+    expect(res.error).toBeUndefined();
+    expect(res.result).toEqual({
+      taskId: 'task-1',
+      action: 'modify',
+      guidance: 'Tighten the auth boundary.',
     });
   });
 });

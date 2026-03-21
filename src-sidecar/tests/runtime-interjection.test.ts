@@ -45,7 +45,7 @@ afterEach(() => {
 });
 
 describe('LocalTeamRuntime task interjection', () => {
-  it('restarts a completed task with guidance and preserves history', async () => {
+  it('reruns a review task with guidance and preserves history', async () => {
     const root = await createGitWorkspace('localteam-interject-completed-');
     const prompts: PromptCapture[] = [];
     const runtime = new LocalTeamRuntime(() => {});
@@ -81,16 +81,16 @@ describe('LocalTeamRuntime task interjection', () => {
 
       await waitFor(async () => {
         const task = (await runtime.status()).tasks.find((entry) => entry.id === taskId);
-        return task?.status === 'completed';
+        return task?.status === 'review';
       }, 2_000);
 
       const rerun = await runtime.interjectTask(taskId, 'Please tighten the auth boundary.');
       expect(rerun.tasks.find((entry) => entry.id === taskId)).toBeTruthy();
 
-      await waitFor(async () => prompts.length >= 3, 5_000);
+      await waitFor(async () => prompts.length >= 2, 5_000);
       await waitFor(async () => {
         const task = (await runtime.status()).tasks.find((entry) => entry.id === taskId);
-        return task?.status === 'completed';
+        return task?.status === 'review';
       }, 5_000);
 
       const messages = await runtime.listMessages(taskId);
@@ -114,9 +114,9 @@ describe('LocalTeamRuntime task interjection', () => {
     const root = await createGitWorkspace('localteam-interject-live-');
     const prompts: PromptCapture[] = [];
     const runtime = new LocalTeamRuntime(() => {});
-    let releaseSecondAgent!: () => void;
-    const secondAgentGate = new Promise<void>((resolve) => {
-      releaseSecondAgent = resolve;
+    let releaseBlockedAgent!: () => void;
+    const blockedAgentGate = new Promise<void>((resolve) => {
+      releaseBlockedAgent = resolve;
     });
 
     const config: ProjectConfig = {
@@ -137,6 +137,14 @@ describe('LocalTeamRuntime task interjection', () => {
             model: 'mock',
             provider: 'mock',
             systemPrompt: 'Review the security boundary.',
+            canExecuteCommands: false,
+          },
+          {
+            id: 'engineer',
+            role: 'Implementation Engineer',
+            model: 'mock',
+            provider: 'mock',
+            systemPrompt: 'Turn the plan into execution-ready steps.',
             canExecuteCommands: false,
           },
         ],
@@ -175,7 +183,7 @@ describe('LocalTeamRuntime task interjection', () => {
 
             if (callIndex === 2) {
               yield 'OBJECTION: waiting for user guidance';
-              await secondAgentGate;
+              await blockedAgentGate;
               return;
             }
 
@@ -193,7 +201,7 @@ describe('LocalTeamRuntime task interjection', () => {
         'Design the auth boundary, hardening path, and review process.',
       );
       const taskId = snapshot.tasks[snapshot.tasks.length - 1].id;
-      expect(snapshot.tasks[snapshot.tasks.length - 1].assignedAgents).toHaveLength(2);
+      expect(snapshot.tasks[snapshot.tasks.length - 1].assignedAgents).toHaveLength(1);
 
       await waitFor(async () => prompts.length >= 2, 5_000);
       const interjectionPromise = runtime.interjectTask(
@@ -201,17 +209,17 @@ describe('LocalTeamRuntime task interjection', () => {
         'Bias the next round toward least privilege.',
       );
       await interjectionPromise;
-      releaseSecondAgent();
+      releaseBlockedAgent();
 
-      await waitFor(async () => prompts.length >= 5, 10_000);
+      await waitFor(async () => prompts.length >= 4, 10_000);
       await waitFor(async () => {
         const task = (await runtime.status()).tasks.find((entry) => entry.id === taskId);
-        return task?.status === 'completed';
+        return task?.status === 'review';
       }, 5_000);
 
       const latest = await runtime.status();
       const task = latest.tasks.find((entry) => entry.id === taskId);
-      expect(task?.status).toBe('completed');
+      expect(task?.status).toBe('review');
 
       const messages = await runtime.listMessages(taskId);
       expect(messages.some((message) => message.type === 'user')).toBe(true);
@@ -219,12 +227,15 @@ describe('LocalTeamRuntime task interjection', () => {
       expect(guidanceMessages[guidanceMessages.length - 1]?.content).toBe(
         'Bias the next round toward least privilege.',
       );
-      expect(prompts[3].messages.at(-1)?.content).toContain(
+      expect(prompts.some((prompt) =>
+        prompt.messages.at(-1)?.content.includes('Bias the next round toward least privilege.'),
+      )).toBe(true);
+      expect(prompts[2].messages.at(-1)?.content).toContain(
         'Bias the next round toward least privilege.',
       );
     } finally {
       runtime.dispose();
-      releaseSecondAgent?.();
+      releaseBlockedAgent?.();
       await rm(root, { recursive: true, force: true });
     }
   });

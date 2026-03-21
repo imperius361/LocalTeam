@@ -36,10 +36,39 @@ export interface AgentMessage {
   taskId?: string;
   round?: number;
   tokenEstimate?: number;
-  meta?: Record<string, unknown>;
+  meta?: AgentMessageMeta;
 }
 
-export type TaskStatus = 'pending' | 'in_progress' | 'review' | 'completed';
+export type TaskStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'review'
+  | 'completed'
+  | 'cancelled';
+
+export type TaskOrigin = 'user_request' | 'agent_subtask';
+
+export type TaskReviewAction = 'approve' | 'modify' | 'reject';
+
+export interface TaskReviewSummary {
+  proposalMessageId: string;
+  summaryText: string;
+  presentedAt: number;
+  lastUserAction?: TaskReviewAction;
+}
+
+export interface MessageFlowMeta {
+  fromId: string;
+  toId: string;
+  edgeLabel: string;
+  phase: 'request' | 'planning' | 'review' | 'execution';
+  audience: 'manager' | 'user';
+  round?: number;
+}
+
+export interface AgentMessageMeta extends Record<string, unknown> {
+  flow?: MessageFlowMeta;
+}
 
 export interface Task {
   id: string;
@@ -55,6 +84,10 @@ export interface Task {
   consensusState?: 'pending' | 'reached' | 'escalated';
   sandboxPath?: string;
   sandboxDiffStat?: string;
+  origin: TaskOrigin;
+  createdByAgentId?: string;
+  managerAgentId?: string;
+  reviewSummary?: TaskReviewSummary;
 }
 
 export interface ConsensusConfig {
@@ -149,6 +182,7 @@ export interface MessageStreamDelta {
   delta: string;
   content: string;
   timestamp: number;
+  meta?: AgentMessageMeta;
 }
 
 export interface MessageStreamFinalization {
@@ -176,6 +210,12 @@ export interface CommandExecutionRequest {
 export interface TaskInterjectionRequest {
   taskId: string;
   guidance: string;
+}
+
+export interface TaskReviewResponseRequest {
+  taskId: string;
+  action: TaskReviewAction;
+  guidance?: string;
 }
 
 export interface CommandApproval {

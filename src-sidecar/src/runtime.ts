@@ -197,7 +197,9 @@ export class LocalTeamRuntime {
     const selectedRoot = this.normalizeSelectedRoot(rootPath ?? this.defaultProjectRoot);
     if (!selectedRoot) {
       this.clearLoadedProject();
-      return this.getSnapshot();
+      const snapshot = await this.getSnapshot();
+      this.emitSnapshot(snapshot);
+      return snapshot;
     }
 
     const projectRoot = await resolveGitWorkspaceRoot(selectedRoot);
@@ -234,7 +236,9 @@ export class LocalTeamRuntime {
 
     this.rebuildAgents();
     this.startProjectWatcher(projectRoot);
-    return this.getSnapshot();
+    const snapshot = await this.getSnapshot();
+    this.emitSnapshot(snapshot);
+    return snapshot;
   }
 
   async saveProject(config: ProjectConfig): Promise<ProjectSnapshot> {
@@ -431,24 +435,31 @@ export class LocalTeamRuntime {
       await this.startSession();
     }
 
-    const assignedAgents = this.selectAgentsForTask(
-      title,
-      description,
-      parentTaskId ? 1 : 2,
-    );
+    const manager = this.getManagerAgentConfig();
+    const assignedAgents = parentTaskId
+      ? this.selectAgentsForTask(title, description, 1)
+      : manager
+        ? [manager.id]
+        : this.selectAgentsForTask(title, description, 1);
 
     const task = this.taskManager.create(title, description, {
       parentTaskId,
       assignedAgents,
       sessionId: this.session?.id,
       consensusState: 'pending',
+      origin: parentTaskId ? 'agent_subtask' : 'user_request',
+      managerAgentId: manager?.id,
     });
 
-    await this.database?.saveTask(task);
-    this.notify({
-      method: 'v1.task.updated',
-      params: { task },
-    });
+    await this.persistAndNotifyTask(task.id);
+    if (!parentTaskId) {
+      this.emitUserMessage(
+        task.id,
+        description.trim() ? `${title}\n\n${description.trim()}` : title,
+        'User Request',
+        manager?.id ?? 'manager',
+      );
+    }
 
     void this.runTask(task.id);
     return this.getSnapshot();
@@ -467,18 +478,16 @@ export class LocalTeamRuntime {
       throw new Error('Guidance must not be empty');
     }
 
-    const message: AgentMessage = {
-      id: randomUUID(),
-      agentId: 'user',
-      agentRole: 'User',
-      type: 'user',
-      content: trimmedGuidance,
-      timestamp: Date.now(),
-      taskId,
-      tokenEstimate: estimateTokens(trimmedGuidance),
-    };
+    if (task.origin === 'user_request' && task.status === 'review') {
+      return this.respondToTaskReview(taskId, 'modify', trimmedGuidance);
+    }
 
-    this.messageBus.emit(message);
+    this.emitUserMessage(
+      taskId,
+      trimmedGuidance,
+      task.origin === 'user_request' ? 'Modify' : 'Guidance',
+      task.managerAgentId ?? task.assignedAgents[0] ?? 'manager',
+    );
     this.queueTaskGuidance(taskId, trimmedGuidance);
     this.notify({
       method: 'v1.task.interjected',
@@ -496,15 +505,82 @@ export class LocalTeamRuntime {
         status: 'in_progress',
         consensusState: 'pending',
       });
-      const updatedTask = this.taskManager.get(taskId)!;
-      await this.database?.saveTask(updatedTask);
-      this.notify({
-        method: 'v1.task.updated',
-        params: { task: updatedTask },
-      });
+      await this.persistAndNotifyTask(taskId);
       void this.runTask(taskId);
     }
 
+    return this.getSnapshot();
+  }
+
+  async respondToTaskReview(
+    taskId: string,
+    action: 'approve' | 'modify' | 'reject',
+    guidance?: string,
+  ): Promise<ProjectSnapshot> {
+    await this.ensureProjectLoaded();
+
+    const task = this.taskManager.get(taskId);
+    if (!task) {
+      throw new Error(`Task not found: ${taskId}`);
+    }
+    if (task.origin !== 'user_request') {
+      throw new Error('Only user request tasks can receive review responses.');
+    }
+
+    const trimmedGuidance =
+      typeof guidance === 'string' && guidance.trim() ? guidance.trim() : undefined;
+    if (action === 'modify' && !trimmedGuidance) {
+      throw new Error('Guidance must not be empty');
+    }
+
+    const managerId = task.managerAgentId ?? this.getManagerAgentConfig()?.id ?? 'manager';
+    const userContent =
+      action === 'modify'
+        ? trimmedGuidance!
+        : action === 'approve'
+          ? 'User approved the manager plan.'
+          : 'User rejected the manager plan.';
+    this.emitUserMessage(taskId, userContent, REVIEW_EDGE_LABELS[action], managerId);
+
+    const reviewSummary = task.reviewSummary
+      ? {
+          ...task.reviewSummary,
+          lastUserAction: action,
+        }
+      : undefined;
+
+    if (action === 'reject') {
+      this.taskManager.update(taskId, {
+        status: 'cancelled',
+        reviewSummary,
+      });
+      await this.persistAndNotifyTask(taskId);
+      await this.refreshSessionStatus();
+      return this.getSnapshot();
+    }
+
+    this.taskManager.update(taskId, {
+      status: 'in_progress',
+      consensusState: 'pending',
+      reviewSummary,
+    });
+    await this.persistAndNotifyTask(taskId);
+
+    if (action === 'modify') {
+      void this.runTask(taskId, trimmedGuidance);
+      return this.getSnapshot();
+    }
+
+    await this.createAgentSubtasks(taskId);
+    const createdSubtasks = this.taskManager
+      .list()
+      .filter((entry) => entry.parentTaskId === taskId);
+    if (createdSubtasks.length === 0) {
+      this.taskManager.update(taskId, { status: 'completed' });
+      await this.persistAndNotifyTask(taskId);
+    } else {
+      await this.refreshSessionStatus();
+    }
     return this.getSnapshot();
   }
 
@@ -653,21 +729,26 @@ export class LocalTeamRuntime {
       throw new Error(`Task not found: ${taskId}`);
     }
 
+    if (task.origin === 'user_request' && task.status === 'review') {
+      if (action === 'continue') {
+        return this.respondToTaskReview(taskId, 'modify', overrideMessage);
+      }
+      return this.respondToTaskReview(taskId, 'approve', overrideMessage);
+    }
+
     if (action === 'override') {
-      const message: AgentMessage = {
-        id: randomUUID(),
-        agentId: 'user',
-        agentRole: 'User',
-        type: 'user',
-        content: overrideMessage?.trim() || 'User approved a manual override.',
-        timestamp: Date.now(),
+      this.emitUserMessage(
         taskId,
-        tokenEstimate: estimateTokens(overrideMessage ?? ''),
-      };
-      this.messageBus.emit(message);
-      this.taskManager.transition(taskId, 'completed');
-      this.taskManager.setConsensusState(taskId, 'reached');
-      await this.database?.saveTask(this.taskManager.get(taskId)!);
+        overrideMessage?.trim() || 'User approved a manual override.',
+        'Approve',
+        task.managerAgentId ?? this.getManagerAgentConfig()?.id ?? 'manager',
+      );
+      this.taskManager.update(taskId, {
+        status: 'completed',
+        consensusState: 'reached',
+      });
+      await this.persistAndNotifyTask(taskId);
+      await this.updateParentTaskState(task.parentTaskId);
       return this.getSnapshot();
     }
 
@@ -675,7 +756,7 @@ export class LocalTeamRuntime {
       status: 'in_progress',
       consensusState: 'pending',
     });
-    await this.database?.saveTask(this.taskManager.get(taskId)!);
+    await this.persistAndNotifyTask(taskId);
     void this.runTask(taskId, action === 'continue' ? overrideMessage : undefined);
     return this.getSnapshot();
   }
@@ -731,7 +812,21 @@ export class LocalTeamRuntime {
 
       let pendingGuidance = this.consumeTaskGuidance(taskId, userGuidance);
 
-      if (task.status === 'pending') {
+      if (task.origin === 'user_request') {
+        await this.runPlanningTask(
+          task,
+          pendingGuidance,
+          async (activeTask, stage, event) => reportStreamFailure(activeTask, stage, event),
+        );
+        return;
+      }
+
+      const refreshedTask = this.taskManager.get(taskId);
+      if (!refreshedTask) {
+        return;
+      }
+
+      if (refreshedTask.status === 'pending') {
         this.taskManager.transition(taskId, 'in_progress');
       } else {
         this.taskManager.update(taskId, { status: 'in_progress' });
@@ -745,17 +840,8 @@ export class LocalTeamRuntime {
         this.taskManager.setSandbox(taskId, undefined, undefined);
       }
 
-      await this.database?.saveTask(this.taskManager.get(taskId)!);
-      this.notify({
-        method: 'v1.task.updated',
-        params: { task: this.taskManager.get(taskId)! },
-      });
+      await this.persistAndNotifyTask(taskId);
       await this.updateSessionStatus('running');
-
-      await this.maybeDecomposeRootTask(
-        taskId,
-        async (rootTask, stage, event) => reportStreamFailure(rootTask, stage, event),
-      );
 
       const activeTask = this.taskManager.get(taskId);
       if (!activeTask) {
@@ -765,11 +851,7 @@ export class LocalTeamRuntime {
       const participantAgentIds = this.resolveParticipatingAgents(activeTask);
       if (participantAgentIds.length === 0) {
         this.taskManager.transition(taskId, 'review');
-        await this.database?.saveTask(this.taskManager.get(taskId)!);
-        this.notify({
-          method: 'v1.task.updated',
-          params: { task: this.taskManager.get(taskId)! },
-        });
+        await this.persistAndNotifyTask(taskId);
         this.emitSystemMessage(
           taskId,
           `LocalTeam could not start this discussion because no eligible agents were available for "${activeTask.title}".`,
@@ -786,6 +868,7 @@ export class LocalTeamRuntime {
           'No eligible agents',
           activeTask.title,
         );
+        await this.updateParentTaskState(activeTask.parentTaskId);
         return;
       }
 
@@ -798,15 +881,12 @@ export class LocalTeamRuntime {
         activeTask.assignedAgents.some((id) => !participantAgentIds.includes(id))
       ) {
         this.taskManager.assign(taskId, participantAgentIds);
-        await this.database?.saveTask(this.taskManager.get(taskId)!);
-        this.notify({
-          method: 'v1.task.updated',
-          params: { task: this.taskManager.get(taskId)! },
-        });
+        await this.persistAndNotifyTask(taskId);
       }
 
       const consensus = new ConsensusProtocol(this.config.consensus);
-      let prompt = buildRoundPrompt(participantAgents, activeTask, pendingGuidance);
+      const managerId = activeTask.managerAgentId ?? this.getManagerAgentConfig()?.id ?? participantAgentIds[0];
+      let prompt = buildExecutionPrompt(participantAgents, activeTask, pendingGuidance);
 
       for (let round = 1; round <= this.config.consensus.maxRounds; round++) {
         for (const agentId of participantAgentIds) {
@@ -815,7 +895,33 @@ export class LocalTeamRuntime {
 
         for await (const message of this.orchestrator.runRound(taskId, prompt, round, {
           agentIds: participantAgentIds,
-          onStreamDelta: async (event) => this.notifyStreamDelta(event),
+          decorateMessage: (finalMessage) => ({
+            ...finalMessage,
+            meta: mergeMessageMeta(finalMessage.meta, {
+              flow: buildTaskFlowMeta(
+                finalMessage.agentId,
+                managerId,
+                getFlowLabelForMessage(finalMessage.type, 'execution'),
+                'execution',
+                'manager',
+                round,
+              ),
+            }),
+          }),
+          onStreamDelta: async (event) =>
+            this.notifyStreamDelta({
+              ...event,
+              meta: {
+                flow: buildTaskFlowMeta(
+                  event.agentId,
+                  managerId,
+                  getFlowLabelForMessage(inferMessageType(event.content), 'execution'),
+                  'execution',
+                  'manager',
+                  round,
+                ),
+              },
+            }),
           onMessageFinalized: async ({ message }) =>
             this.notifyMessageFinalization({
               messageId: message.id,
@@ -856,14 +962,11 @@ export class LocalTeamRuntime {
         if (result.status === 'reached') {
           this.taskManager.setConsensusState(taskId, 'reached');
           this.taskManager.transition(taskId, 'completed');
-          await this.database?.saveTask(this.taskManager.get(taskId)!);
+          await this.persistAndNotifyTask(taskId);
           this.resetAgentStatuses();
           await this.refreshSessionStatus();
-          this.notify({
-            method: 'v1.task.updated',
-            params: { task: this.taskManager.get(taskId)! },
-          });
           this.notifyShellNotification('info', 'Task completed', activeTask.title);
+          await this.updateParentTaskState(activeTask.parentTaskId);
           return;
         }
 
@@ -877,7 +980,7 @@ export class LocalTeamRuntime {
           this.taskManager.setConsensusState(taskId, 'escalated');
           this.taskManager.transition(taskId, 'review');
           await this.database?.saveConsensus(escalated);
-          await this.database?.saveTask(this.taskManager.get(taskId)!);
+          await this.persistAndNotifyTask(taskId);
           this.resetAgentStatuses();
           await this.refreshSessionStatus();
           this.notify({
@@ -885,11 +988,12 @@ export class LocalTeamRuntime {
             params: { consensus: escalated },
           });
           this.notifyShellNotification('warning', 'Consensus required', activeTask.title);
+          await this.updateParentTaskState(activeTask.parentTaskId);
           return;
         }
 
         const nextGuidance = this.consumeTaskGuidance(taskId);
-        const followUpPrompt = buildFollowUpPrompt(
+        const followUpPrompt = buildExecutionFollowUpPrompt(
           activeTask,
           round + 1,
           consensus.getEscalationSummary(),
@@ -909,9 +1013,10 @@ export class LocalTeamRuntime {
     }
   }
 
-  private async maybeDecomposeRootTask(
-    taskId: string,
-    onMessageError?: (
+  private async runPlanningTask(
+    task: Task,
+    pendingGuidance: string | undefined,
+    onMessageError: (
       task: Task,
       stage: string,
       event: MessageErrorEvent,
@@ -921,53 +1026,195 @@ export class LocalTeamRuntime {
       return;
     }
 
-    const task = this.taskManager.get(taskId);
-    if (!task || task.parentTaskId) {
+    const manager = this.getManagerAgentConfig(task);
+    const managerId = manager?.id ?? task.managerAgentId ?? 'manager';
+
+    if (task.status === 'pending') {
+      this.taskManager.transition(task.id, 'in_progress');
+    } else {
+      this.taskManager.update(task.id, { status: 'in_progress' });
+    }
+    this.taskManager.update(task.id, {
+      managerAgentId: managerId,
+      assignedAgents: manager ? [manager.id] : task.assignedAgents,
+    });
+    await this.persistAndNotifyTask(task.id);
+    await this.updateSessionStatus('running');
+
+    const participantAgentIds = this.resolvePlanningParticipants(task, managerId);
+    if (participantAgentIds.length === 0) {
+      const fallbackState: ConsensusState = {
+        taskId: task.id,
+        round: 0,
+        status: 'escalated',
+        supporters: [],
+        summary: [],
+        updatedAt: Date.now(),
+      };
+      this.consensusStates.set(task.id, fallbackState);
+      await this.database?.saveConsensus(fallbackState);
+      this.notify({
+        method: 'v1.consensus.updated',
+        params: { consensus: fallbackState },
+      });
+      await this.presentTaskForReview(task.id, fallbackState);
+      this.resetAgentStatuses();
+      await this.refreshSessionStatus();
       return;
+    }
+
+    const participantAgents = this.config.team.agents.filter((agent) =>
+      participantAgentIds.includes(agent.id),
+    );
+    const consensus = new ConsensusProtocol(this.config.consensus);
+    let prompt = buildPlanningPrompt(participantAgents, task, pendingGuidance);
+
+    for (let round = 1; round <= this.config.consensus.maxRounds; round++) {
+      for (const agentId of participantAgentIds) {
+        this.setAgentStatus(agentId, 'thinking');
+      }
+
+      for await (const message of this.orchestrator.runRound(task.id, prompt, round, {
+        agentIds: participantAgentIds,
+        decorateMessage: (finalMessage) => ({
+          ...finalMessage,
+          meta: mergeMessageMeta(finalMessage.meta, {
+            flow: buildTaskFlowMeta(
+              finalMessage.agentId,
+              managerId,
+              getFlowLabelForMessage(finalMessage.type, 'planning'),
+              'planning',
+              'manager',
+              round,
+            ),
+          }),
+        }),
+        onStreamDelta: async (event) =>
+          this.notifyStreamDelta({
+            ...event,
+            meta: {
+              flow: buildTaskFlowMeta(
+                event.agentId,
+                managerId,
+                getFlowLabelForMessage(inferMessageType(event.content), 'planning'),
+                'planning',
+                'manager',
+                round,
+              ),
+            },
+          }),
+        onMessageFinalized: async ({ message }) =>
+          this.notifyMessageFinalization({
+            messageId: message.id,
+            taskId: message.taskId ?? task.id,
+            agentId: message.agentId,
+            round: message.round ?? round,
+            timestamp: Date.now(),
+          }),
+        onMessageError: async (event) =>
+          onMessageError(task, `planning round ${round}`, event),
+      })) {
+        this.setAgentStatus(message.agentId, 'writing');
+        consensus.recordPosition(message.agentId, message.content);
+        const tokenEstimate =
+          (this.taskManager.get(task.id)?.tokenEstimate ?? 0) +
+          (message.tokenEstimate ?? 0);
+        this.taskManager.updateTokenEstimate(task.id, tokenEstimate);
+        await this.database?.saveTask(this.taskManager.get(task.id)!);
+        this.setAgentStatus(message.agentId, 'waiting_for_consensus');
+      }
+
+      const result = consensus.evaluate(participantAgentIds);
+      const state: ConsensusState = {
+        taskId: task.id,
+        round,
+        status: result.status === 'reached' ? 'reached' : 'pending',
+        supporters: result.status === 'reached' ? result.supporters : [],
+        summary: consensus.getEscalationSummary(),
+        updatedAt: Date.now(),
+      };
+
+      const persistedState =
+        result.status === 'reached' || round < this.config.consensus.maxRounds
+          ? state
+          : {
+              ...state,
+              status: 'escalated' as const,
+              updatedAt: Date.now(),
+            };
+      this.consensusStates.set(task.id, persistedState);
+      await this.database?.saveConsensus(persistedState);
+      this.notify({
+        method: 'v1.consensus.updated',
+        params: { consensus: persistedState },
+      });
+
+      if (result.status === 'reached' || round >= this.config.consensus.maxRounds) {
+        await this.presentTaskForReview(task.id, persistedState);
+        this.resetAgentStatuses();
+        await this.refreshSessionStatus();
+        this.notifyShellNotification('info', 'Plan ready for review', task.title);
+        return;
+      }
+
+      const nextGuidance = this.consumeTaskGuidance(task.id);
+      const followUpPrompt = buildPlanningFollowUpPrompt(
+        task,
+        round + 1,
+        consensus.getEscalationSummary(),
+      );
+      prompt = nextGuidance
+        ? [nextGuidance, followUpPrompt].join('\n\n')
+        : followUpPrompt;
+    }
+  }
+
+  private async createAgentSubtasks(
+    taskId: string,
+  ): Promise<Task[]> {
+    if (!this.config) {
+      return [];
+    }
+
+    const task = this.taskManager.get(taskId);
+    if (!task) {
+      return [];
     }
 
     const existingSubtasks = this.taskManager
       .list()
       .filter((entry) => entry.parentTaskId === taskId);
     if (existingSubtasks.length > 0) {
-      return;
+      for (const existing of existingSubtasks) {
+        if (existing.status === 'pending' || existing.status === 'review') {
+          if (existing.status === 'review') {
+            this.taskManager.update(existing.id, {
+              status: 'pending',
+              consensusState: 'pending',
+            });
+            await this.persistAndNotifyTask(existing.id);
+          }
+          if (!this.activeTaskRuns.has(existing.id)) {
+            void this.runTask(existing.id);
+          }
+        }
+      }
+      return existingSubtasks.map((entry) => this.taskManager.get(entry.id) ?? entry);
     }
 
-    const lead = selectLeadAgent(this.config.team.agents);
-    if (!lead) {
-      return;
+    const manager = this.getManagerAgentConfig(task);
+    if (!manager) {
+      return [];
     }
 
-    const prompt = buildDecompositionPrompt(task, this.config.team.agents);
-    let leadMessage: AgentMessage | undefined;
-    this.setAgentStatus(lead.id, 'thinking');
-    for await (const message of this.orchestrator.runRound(taskId, prompt, 0, {
-      agentIds: [lead.id],
-      onStreamDelta: async (event) => this.notifyStreamDelta(event),
-      onMessageFinalized: async ({ message }) =>
-        this.notifyMessageFinalization({
-          messageId: message.id,
-          taskId: message.taskId ?? taskId,
-          agentId: message.agentId,
-          round: message.round ?? 0,
-          timestamp: Date.now(),
-        }),
-      onMessageError: onMessageError
-        ? async (event) => onMessageError(task, 'task decomposition', event)
-        : undefined,
-    })) {
-      this.setAgentStatus(message.agentId, 'writing');
-      leadMessage = message;
-      const tokenEstimate =
-        (this.taskManager.get(taskId)?.tokenEstimate ?? 0) +
-        (message.tokenEstimate ?? 0);
-      this.taskManager.updateTokenEstimate(taskId, tokenEstimate);
-      await this.database?.saveTask(this.taskManager.get(taskId)!);
-      this.setAgentStatus(message.agentId, 'idle');
-    }
-
-    const leadOutput = leadMessage?.content ?? '';
-    const subtasks = deriveSubtasksFromLeadOutput(task, this.config.team.agents, leadOutput);
+    const seedContent =
+      task.reviewSummary?.summaryText || task.description || task.title;
+    const subtasks = deriveSubtasksFromLeadOutput(
+      task,
+      this.config.team.agents,
+      seedContent,
+    );
+    const created: Task[] = [];
 
     for (const subtaskSpec of subtasks) {
       const subtask = this.taskManager.createSubtask(
@@ -982,21 +1229,43 @@ export class LocalTeamRuntime {
         {
           roleHint: subtaskSpec.roleHint,
           maxAgents: 1,
-          fallbackAgentId: lead.id,
+          fallbackAgentId: manager.id,
         },
       );
       this.taskManager.assign(subtask.id, assignees);
       this.taskManager.update(subtask.id, {
         sessionId: task.sessionId,
         consensusState: 'pending',
+        origin: 'agent_subtask',
+        createdByAgentId: manager.id,
+        managerAgentId: manager.id,
       });
       const persisted = this.taskManager.get(subtask.id)!;
-      await this.database?.saveTask(persisted);
-      this.notify({
-        method: 'v1.task.updated',
-        params: { task: persisted },
+      await this.persistAndNotifyTask(persisted.id);
+      created.push(persisted);
+      this.emitTaskMessage({
+        id: randomUUID(),
+        agentId: manager.id,
+        agentRole: manager.role,
+        type: 'system',
+        content: `Assigned subtask "${persisted.title}" to ${this.getAgentRole(assignees[0])}.`,
+        timestamp: Date.now(),
+        taskId,
+        tokenEstimate: estimateTokens(persisted.title),
+        meta: {
+          flow: buildTaskFlowMeta(
+            manager.id,
+            assignees[0] ?? manager.id,
+            'Executes',
+            'execution',
+            'manager',
+          ),
+        },
       });
+      void this.runTask(persisted.id);
     }
+
+    return created;
   }
 
   private resolveParticipatingAgents(task: Task): string[] {
@@ -1012,6 +1281,210 @@ export class LocalTeamRuntime {
 
     const fallback = this.selectAgentsForTask(task.title, task.description, task.parentTaskId ? 1 : 2);
     return fallback.filter((agentId) => available.has(agentId));
+  }
+
+  private resolvePlanningParticipants(task: Task, managerId: string): string[] {
+    if (!this.config) {
+      return [];
+    }
+
+    const available = this.config.team.agents
+      .map((agent) => agent.id)
+      .filter((agentId) => agentId !== managerId);
+
+    if (available.length > 0) {
+      return available;
+    }
+
+    return managerId ? [managerId] : [];
+  }
+
+  private getManagerAgentConfig(task?: Task): AgentConfig | undefined {
+    if (!this.config) {
+      return undefined;
+    }
+
+    const taskManagerAgentId = task?.managerAgentId;
+    if (taskManagerAgentId) {
+      const explicit = this.config.team.agents.find((agent) => agent.id === taskManagerAgentId);
+      if (explicit) {
+        return explicit;
+      }
+    }
+
+    return selectLeadAgent(this.config.team.agents);
+  }
+
+  private getAgentRole(agentId?: string): string {
+    if (!agentId) {
+      return 'Unassigned agent';
+    }
+
+    const status = this.agentStatuses.get(agentId);
+    if (status) {
+      return status.role;
+    }
+
+    return this.config?.team.agents.find((agent) => agent.id === agentId)?.role ?? agentId;
+  }
+
+  private async persistAndNotifyTask(taskId: string): Promise<Task | undefined> {
+    const task = this.taskManager.get(taskId);
+    if (!task) {
+      return undefined;
+    }
+
+    await this.database?.saveTask(task);
+    this.notify({
+      method: 'v1.task.updated',
+      params: { task },
+    });
+    return task;
+  }
+
+  private emitTaskMessage(message: AgentMessage): AgentMessage {
+    this.messageBus.emit(message);
+    return message;
+  }
+
+  private emitUserMessage(
+    taskId: string,
+    content: string,
+    edgeLabel: string,
+    toId: string,
+  ): AgentMessage {
+    return this.emitTaskMessage({
+      id: randomUUID(),
+      agentId: 'user',
+      agentRole: 'User',
+      type: 'user',
+      content,
+      timestamp: Date.now(),
+      taskId,
+      tokenEstimate: estimateTokens(content),
+      meta: {
+        flow: buildTaskFlowMeta('user', toId, edgeLabel, 'request', 'manager'),
+      },
+    });
+  }
+
+  private async presentTaskForReview(
+    taskId: string,
+    consensusState: ConsensusState,
+  ): Promise<void> {
+    const task = this.taskManager.get(taskId);
+    if (!task) {
+      return;
+    }
+
+    const manager = this.getManagerAgentConfig(task);
+    const managerId = manager?.id ?? task.managerAgentId ?? 'manager';
+    const summaryText = this.buildReviewSummary(task, consensusState);
+    const summaryMessage = this.emitTaskMessage({
+      id: randomUUID(),
+      agentId: managerId,
+      agentRole: manager?.role ?? 'Team Manager',
+      type: 'proposal',
+      content: summaryText,
+      timestamp: Date.now(),
+      taskId,
+      tokenEstimate: estimateTokens(summaryText),
+      meta: {
+        flow: buildTaskFlowMeta(
+          managerId,
+          'user',
+          'Plan',
+          'review',
+          'user',
+          consensusState.round,
+        ),
+      },
+    });
+
+    this.taskManager.update(taskId, {
+      status: 'review',
+      consensusState: consensusState.status === 'reached' ? 'reached' : 'escalated',
+      managerAgentId: managerId,
+      assignedAgents: manager ? [manager.id] : task.assignedAgents,
+      reviewSummary: {
+        proposalMessageId: summaryMessage.id,
+        summaryText,
+        presentedAt: summaryMessage.timestamp,
+        lastUserAction: task.reviewSummary?.lastUserAction,
+      },
+    });
+    await this.persistAndNotifyTask(taskId);
+  }
+
+  private buildReviewSummary(task: Task, consensusState: ConsensusState): string {
+    const messages = this.messageBus
+      .getHistory(task.id)
+      .filter((entry) => entry.agentId !== 'user' && entry.agentId !== 'system');
+    const preferredMessage =
+      [...messages]
+        .reverse()
+        .find((entry) => entry.type === 'proposal') ??
+      [...messages]
+        .reverse()
+        .find((entry) => entry.type === 'discussion' || entry.type === 'consensus');
+    const planBody = normalizeAgentResponse(preferredMessage?.content);
+    const teamSummary = consensusState.summary
+      .map((entry) => `${this.getAgentRole(entry.agentId)}: ${normalizeAgentResponse(entry.position)}`)
+      .join('\n');
+
+    return [
+      `Manager review for "${task.title}"`,
+      planBody || `Proceed with the plan for "${task.title}".`,
+      teamSummary ? `Team feedback:\n${teamSummary}` : null,
+      consensusState.status === 'reached'
+        ? 'Team discussion converged on this plan.'
+        : 'The team is still split, but this is the manager summary to review.',
+      'Respond with approve, modify, or reject.',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  private async updateParentTaskState(parentTaskId?: string): Promise<void> {
+    if (!parentTaskId) {
+      return;
+    }
+
+    const parent = this.taskManager.get(parentTaskId);
+    if (!parent) {
+      return;
+    }
+
+    const children = this.taskManager
+      .list()
+      .filter((entry) => entry.parentTaskId === parentTaskId);
+    if (children.length === 0) {
+      return;
+    }
+
+    let nextStatus: Task['status'];
+    if (children.every((entry) => entry.status === 'completed')) {
+      nextStatus = 'completed';
+    } else if (children.some((entry) => entry.status === 'review')) {
+      nextStatus = 'review';
+    } else if (children.some((entry) => entry.status === 'in_progress' || entry.status === 'pending')) {
+      nextStatus = 'in_progress';
+    } else if (children.every((entry) => entry.status === 'cancelled')) {
+      nextStatus = 'cancelled';
+    } else {
+      nextStatus = parent.status;
+    }
+
+    const patch: Partial<Task> = { status: nextStatus };
+    if (nextStatus === 'review' && parent.reviewSummary) {
+      patch.reviewSummary = {
+        ...parent.reviewSummary,
+        summaryText: `${parent.reviewSummary.summaryText}\n\nExecution is waiting for at least one agent subtask to be resolved.`,
+      };
+    }
+
+    this.taskManager.update(parentTaskId, patch);
+    await this.persistAndNotifyTask(parentTaskId);
   }
 
   private rebuildAgents(): void {
@@ -1203,16 +1676,11 @@ export class LocalTeamRuntime {
       } else {
         this.taskManager.update(taskId, { status: 'review' });
       }
-      const updatedTask = this.taskManager.get(taskId)!;
-      await this.database?.saveTask(updatedTask);
-      this.notify({
-        method: 'v1.task.updated',
-        params: { task: updatedTask },
-      });
+      const updatedTask = await this.persistAndNotifyTask(taskId);
       if (!streamFailureReported) {
         this.emitSystemMessage(
           taskId,
-          `LocalTeam could not continue "${updatedTask.title}": ${errorDetail}`,
+          `LocalTeam could not continue "${updatedTask?.title ?? task.title}": ${errorDetail}`,
           {
             meta: {
               error: errorDetail,
@@ -1229,6 +1697,7 @@ export class LocalTeamRuntime {
       'Task moved to review',
       task ? `${task.title}: ${errorDetail}` : errorDetail,
     );
+    await this.updateParentTaskState(task?.parentTaskId);
   }
 
   private selectAgentsForTask(
@@ -1485,6 +1954,13 @@ export class LocalTeamRuntime {
       },
     };
   }
+
+  private emitSnapshot(snapshot: ProjectSnapshot): void {
+    this.notify({
+      method: 'v1.snapshot',
+      params: { snapshot },
+    });
+  }
 }
 
 export function shouldIgnoreExternalChange(relativePath: string): boolean {
@@ -1527,6 +2003,36 @@ function buildRoundPrompt(
     .join('\n\n');
 }
 
+function buildPlanningPrompt(
+  agents: AgentConfig[],
+  task: Task,
+  userGuidance?: string,
+): string {
+  return buildRoundPrompt(agents, task, userGuidance);
+}
+
+function buildExecutionPrompt(
+  agents: AgentConfig[],
+  task: Task,
+  userGuidance?: string,
+): string {
+  const roster = agents
+    .map((agent) => `- ${agent.role} (${agent.id})`)
+    .join('\n');
+
+  return [
+    'You are executing an approved LocalTeam subtask.',
+    `Subtask: ${task.title}`,
+    `Description: ${task.description}`,
+    userGuidance ? `Additional user guidance: ${userGuidance}` : null,
+    'Respond with one short execution update. Start with AGREE, OBJECTION, or PROPOSAL.',
+    'Keep the update under 120 words.',
+    `Assigned roster:\n${roster}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
 function buildFollowUpPrompt(
   task: Task,
   nextRound: number,
@@ -1542,6 +2048,110 @@ function buildFollowUpPrompt(
     summary,
     'Respond again. Start with AGREE if you can align, otherwise start with OBJECTION or PROPOSAL.',
   ].join('\n\n');
+}
+
+function buildPlanningFollowUpPrompt(
+  task: Task,
+  nextRound: number,
+  positions: ConsensusState['summary'],
+): string {
+  return buildFollowUpPrompt(task, nextRound, positions);
+}
+
+function buildExecutionFollowUpPrompt(
+  task: Task,
+  nextRound: number,
+  positions: ConsensusState['summary'],
+): string {
+  return [
+    buildFollowUpPrompt(task, nextRound, positions),
+    'Focus on concrete execution progress and blockers.',
+  ].join('\n\n');
+}
+
+const REVIEW_EDGE_LABELS = {
+  approve: 'Approve',
+  modify: 'Modify',
+  reject: 'Reject',
+} as const;
+
+function buildTaskFlowMeta(
+  fromId: string,
+  toId: string,
+  edgeLabel: string,
+  phase: 'request' | 'planning' | 'review' | 'execution',
+  audience: 'manager' | 'user',
+  round?: number,
+): NonNullable<AgentMessage['meta']>['flow'] {
+  return {
+    fromId,
+    toId,
+    edgeLabel,
+    phase,
+    audience,
+    ...(typeof round === 'number' ? { round } : {}),
+  };
+}
+
+function mergeMessageMeta(
+  existing: AgentMessage['meta'] | undefined,
+  next: AgentMessage['meta'],
+): AgentMessage['meta'] {
+  return {
+    ...(existing ?? {}),
+    ...(next ?? {}),
+  };
+}
+
+function inferMessageType(content: string): AgentMessage['type'] {
+  const normalized = content.trimStart().toUpperCase();
+  if (normalized.startsWith('AGREE')) {
+    return 'consensus';
+  }
+  if (normalized.startsWith('OBJECTION')) {
+    return 'objection';
+  }
+  if (normalized.startsWith('PROPOSAL')) {
+    return 'proposal';
+  }
+  return 'discussion';
+}
+
+function getFlowLabelForMessage(
+  type: AgentMessage['type'],
+  phase: 'planning' | 'execution',
+): string {
+  if (phase === 'execution' && type === 'consensus') {
+    return 'Reports Back';
+  }
+
+  switch (type) {
+    case 'proposal':
+      return 'Proposal';
+    case 'objection':
+      return 'Objection';
+    case 'consensus':
+      return phase === 'planning' ? 'Consensus' : 'Reports Back';
+    case 'discussion':
+      return phase === 'planning' ? 'Discussion' : 'Progress';
+    case 'artifact':
+      return 'Artifact';
+    case 'user':
+      return 'User Request';
+    case 'system':
+    default:
+      return 'Update';
+  }
+}
+
+function normalizeAgentResponse(content?: string): string {
+  if (!content) {
+    return '';
+  }
+
+  return content
+    .replace(/^(AGREE|OBJECTION|PROPOSAL)\s*:?\s*/i, '')
+    .trim();
 }
 
 function estimateTokens(content: string): number {

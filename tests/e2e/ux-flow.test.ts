@@ -360,7 +360,10 @@ describe('UX flow assumptions (streaming + task hierarchy)', () => {
         'v1.session.message',
         (event) => {
           const payload = event.params?.message as any;
-          return payload?.taskId === task.id && typeof payload?.content === 'string';
+          return (
+            payload?.taskId === task.id &&
+            payload?.id === (delta.payload.params?.delta as any)?.messageId
+          );
         },
       );
       const finalization = await harness.waitForNotification(
@@ -371,9 +374,8 @@ describe('UX flow assumptions (streaming + task hierarchy)', () => {
         },
       );
 
-      expect(taskProgress.receivedAt).toBeLessThanOrEqual(message.receivedAt);
-      expect(delta.receivedAt).toBeLessThanOrEqual(message.receivedAt);
-      expect(activeAgent.receivedAt).toBeLessThanOrEqual(message.receivedAt);
+      expect(activeAgent.receivedAt).toBeLessThanOrEqual(finalization.receivedAt);
+      expect(taskProgress.receivedAt).toBeLessThanOrEqual(finalization.receivedAt);
       expect(finalization.receivedAt).toBeGreaterThanOrEqual(delta.receivedAt);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -542,4 +544,109 @@ describe('UX flow assumptions (streaming + task hierarchy)', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('supports review modify/approve flow and registers nested agent subtasks', async () => {
+    const root = await createGitWorkspace('localteam-ui-review-approve-');
+
+    try {
+      await harness.request('v1.project.load', { rootPath: root });
+      await harness.request('v1.project.save', {
+        config: makeProjectConfig('Review Team'),
+      });
+      await harness.request('v1.session.start');
+
+      const created = await harness.request('v1.task.create', {
+        title: 'Review request',
+        description: 'Collect the team plan before execution.',
+      });
+      const task = (created as any).tasks.find((entry: any) => entry.title === 'Review request');
+      expect(task).toBeDefined();
+
+      await waitForHarness(async () => {
+        const listed = (await harness.request('v1.task.list')) as any[];
+        const current = listed.find((entry) => entry.id === task.id);
+        return current?.status === 'review' && typeof current?.reviewSummary?.summaryText === 'string';
+      }, 8_000);
+
+      await harness.request('v1.task.review.respond', {
+        taskId: task.id,
+        action: 'modify',
+        guidance: 'Bias the plan toward least privilege.',
+      });
+
+      await waitForHarness(async () => {
+        const listed = (await harness.request('v1.task.list')) as any[];
+        const current = listed.find((entry) => entry.id === task.id);
+        return current?.status === 'review' && current?.reviewSummary?.lastUserAction === 'modify';
+      }, 8_000);
+
+      await harness.request('v1.task.review.respond', {
+        taskId: task.id,
+        action: 'approve',
+      });
+
+      await waitForHarness(async () => {
+        const listed = (await harness.request('v1.task.list')) as any[];
+        return listed.some((entry) => entry.parentTaskId === task.id);
+      }, 8_000);
+
+      const listed = (await harness.request('v1.task.list')) as any[];
+      const subtasks = listed.filter((entry) => entry.parentTaskId === task.id);
+      expect(subtasks.length).toBeGreaterThan(0);
+      expect(subtasks.every((entry) => entry.origin === 'agent_subtask')).toBe(true);
+      expect(subtasks.every((entry) => typeof entry.createdByAgentId === 'string')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('supports rejecting a reviewed request without creating subtasks', async () => {
+    const root = await createGitWorkspace('localteam-ui-review-reject-');
+
+    try {
+      await harness.request('v1.project.load', { rootPath: root });
+      await harness.request('v1.project.save', {
+        config: makeProjectConfig('Reject Team'),
+      });
+      await harness.request('v1.session.start');
+
+      const created = await harness.request('v1.task.create', {
+        title: 'Reject request',
+        description: 'Present a plan and reject it.',
+      });
+      const task = (created as any).tasks.find((entry: any) => entry.title === 'Reject request');
+      expect(task).toBeDefined();
+
+      await waitForHarness(async () => {
+        const listed = (await harness.request('v1.task.list')) as any[];
+        return listed.some((entry) => entry.id === task.id && entry.status === 'review');
+      }, 8_000);
+
+      await harness.request('v1.task.review.respond', {
+        taskId: task.id,
+        action: 'reject',
+      });
+
+      const listed = (await harness.request('v1.task.list')) as any[];
+      const rejected = listed.find((entry) => entry.id === task.id);
+      expect(rejected?.status).toBe('cancelled');
+      expect(listed.filter((entry) => entry.parentTaskId === task.id)).toHaveLength(0);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
+
+async function waitForHarness(
+  check: () => Promise<boolean>,
+  timeoutMs: number,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (await check()) {
+      return;
+    }
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
+  }
+  throw new Error(`Timed out after ${timeoutMs}ms`);
+}

@@ -6,6 +6,7 @@ import type {
   ProjectConfig,
   ProjectSnapshot,
   SidecarNotification,
+  TaskReviewAction,
 } from './contracts';
 
 let requestId = 0;
@@ -142,6 +143,10 @@ export async function loadProjectSnapshot(
   });
 }
 
+export async function getStatusSnapshot(): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.status');
+}
+
 export async function saveProjectConfig(config: ProjectConfig): Promise<ProjectSnapshot> {
   return callSidecar<ProjectSnapshot>('v1.project.save', { config });
 }
@@ -171,6 +176,18 @@ export async function sendTaskGuidance(
   return callSidecar<ProjectSnapshot>('v1.task.interject', {
     taskId,
     ...(guidance ? { guidance } : {}),
+  });
+}
+
+export async function respondToTaskReview(
+  taskId: string,
+  action: TaskReviewAction,
+  guidance?: string,
+): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.task.review.respond', {
+    taskId,
+    action,
+    ...(typeof guidance === 'string' ? { guidance } : {}),
   });
 }
 

@@ -47,14 +47,45 @@ export interface AgentMessage {
   taskId?: string;
   round?: number;
   tokenEstimate?: number;
-  meta?: Record<string, unknown>;
+  meta?: AgentMessageMeta;
+}
+
+export type TaskStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'review'
+  | 'completed'
+  | 'cancelled';
+
+export type TaskOrigin = 'user_request' | 'agent_subtask';
+
+export type TaskReviewAction = 'approve' | 'modify' | 'reject';
+
+export interface TaskReviewSummary {
+  proposalMessageId: string;
+  summaryText: string;
+  presentedAt: number;
+  lastUserAction?: TaskReviewAction;
+}
+
+export interface MessageFlowMeta {
+  fromId: string;
+  toId: string;
+  edgeLabel: string;
+  phase: 'request' | 'planning' | 'review' | 'execution';
+  audience: 'manager' | 'user';
+  round?: number;
+}
+
+export interface AgentMessageMeta extends Record<string, unknown> {
+  flow?: MessageFlowMeta;
 }
 
 export interface Task {
   id: string;
   title: string;
   description: string;
-  status: 'pending' | 'in_progress' | 'review' | 'completed';
+  status: TaskStatus;
   assignedAgents: string[];
   parentTaskId?: string;
   createdAt: number;
@@ -64,6 +95,10 @@ export interface Task {
   consensusState?: 'pending' | 'reached' | 'escalated';
   sandboxPath?: string;
   sandboxDiffStat?: string;
+  origin: TaskOrigin;
+  createdByAgentId?: string;
+  managerAgentId?: string;
+  reviewSummary?: TaskReviewSummary;
 }
 
 export interface AgentStatus {
@@ -128,6 +163,7 @@ export interface MessageStreamDelta {
   delta: string;
   content: string;
   timestamp: number;
+  meta?: AgentMessageMeta;
 }
 
 export interface MessageStreamFinalization {

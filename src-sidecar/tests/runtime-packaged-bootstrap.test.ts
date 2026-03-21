@@ -93,11 +93,28 @@ describe('LocalTeamRuntime packaged-first-run bootstrap', () => {
           requiredMajority: 0.66,
         },
         sandbox: {
-          defaultMode: 'direct',
+          defaultMode: 'worktree',
           useWorktrees: true,
         },
         fileAccess: {
-          denyList: ['.env', '.ssh/', 'credentials*'],
+          denyList: [
+            '.env',
+            '.env.*',
+            '.git',
+            '.git/',
+            '.git-credentials',
+            '.npmrc',
+            '.pypirc',
+            '.ssh',
+            '.ssh/',
+            'credentials*',
+            '*.key',
+            '*.pem',
+            '*.p12',
+            '*.pfx',
+            '*.tfstate',
+            '*.tfstate.*',
+          ],
         },
       });
 

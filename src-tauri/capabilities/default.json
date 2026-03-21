@@ -8,9 +8,6 @@
     "stronghold:default",
     "stronghold:allow-destroy",
     "stronghold:allow-remove-store-record",
-    "dialog:allow-open",
-    "shell:allow-spawn",
-    "shell:allow-stdin-write",
-    "shell:allow-execute"
+    "dialog:allow-open"
   ]
 }

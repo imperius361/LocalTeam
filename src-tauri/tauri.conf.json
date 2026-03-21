@@ -21,7 +21,35 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": {
+        "default-src": [
+          "'self'",
+          "customprotocol:",
+          "asset:",
+          "blob:",
+          "data:",
+          "ipc:",
+          "http://ipc.localhost"
+        ],
+        "style-src": [
+          "'self'",
+          "'unsafe-inline'",
+          "https://fonts.googleapis.com"
+        ],
+        "font-src": [
+          "'self'",
+          "https://fonts.gstatic.com",
+          "data:"
+        ],
+        "img-src": [
+          "'self'",
+          "asset:",
+          "http://asset.localhost",
+          "data:",
+          "blob:"
+        ]
+      },
+      "devCsp": null
     }
   },
   "bundle": {

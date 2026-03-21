@@ -124,6 +124,37 @@ describe('evaluateCommandPolicy', () => {
     expect(result.requiresApproval).toBe(false);
   });
 
+  it('forces manual approval when a pre-approved command uses shell metacharacters', () => {
+    const result = evaluateCommandPolicy({
+      projectRoot,
+      config: makeConfig(),
+      task: makeTask(),
+      agent: makeAgent({
+        allowedPaths: ['src'],
+        preApprovedCommands: ['npm test'],
+      }),
+      request: makeRequest({ command: 'npm test && npm run lint', cwd: 'src' }),
+    });
+
+    expect(result.allowed).toBe(true);
+    expect(result.preApproved).toBe(false);
+    expect(result.requiresApproval).toBe(true);
+    expect(result.reason).toContain('manual approval');
+  });
+
+  it('denies commands with embedded control characters', () => {
+    const result = evaluateCommandPolicy({
+      projectRoot,
+      config: makeConfig(),
+      task: makeTask(),
+      agent: makeAgent(),
+      request: makeRequest({ command: 'git status\ncat .env' }),
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain('control characters');
+  });
+
   it('denies execution in worktree mode when task has no sandbox path', () => {
     const result = evaluateCommandPolicy({
       projectRoot,

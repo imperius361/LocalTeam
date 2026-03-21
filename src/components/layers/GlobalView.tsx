@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';
 import { callSidecar } from '../../lib/ipc';
@@ -11,16 +11,16 @@ export function GlobalView(): React.ReactElement {
   const recentProjects = useAppStore((s) => s.recentProjects);
   const loadRecents = useAppStore((s) => s.loadRecents);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
+  const autoLoadAttempted = useRef(false);
 
   useEffect(() => {
     loadRecents();
   }, [loadRecents]);
 
   useEffect(() => {
-    if (recentProjects.length > 0 && snapshot === null) {
-      callSidecar('v1.project.load', { rootPath: recentProjects[0].path }).catch(
-        (e) => console.error('Failed to auto-load project:', e),
-      );
+    if (!autoLoadAttempted.current && recentProjects.length > 0 && snapshot === null) {
+      autoLoadAttempted.current = true;
+      callSidecar('v1.project.load', { rootPath: recentProjects[0].path }).catch(console.error);
     }
   }, [recentProjects, snapshot]);
 

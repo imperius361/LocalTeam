@@ -251,8 +251,7 @@ export function TeamView(): React.ReactElement {
 
     setNodes(newNodes);
     setEdges(newEdges);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentStatuses, messages, consensus, isAnyActive]);
+  }, [agentStatuses, messages, consensus, isAnyActive, handleNavigate]);
 
   // Activity panel: last 10 messages newest-first
   const recentMessages = [...messages]

@@ -1,3 +1,4 @@
+import React from 'react';
 import { useState } from 'react';
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';

@@ -85,7 +85,10 @@ export function AgentView(): React.ReactElement {
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}>
+    <div
+      data-testid="agent-view"
+      style={{ height: '100%', display: 'flex', flexDirection: 'column', background: 'var(--bg-base)' }}
+    >
       <div
         style={{
           flexShrink: 0,
@@ -122,7 +125,12 @@ export function AgentView(): React.ReactElement {
         </div>
         <StatusBadge status={status.status} />
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button style={buttonStyle} onClick={() => restartSidecar().catch(console.error)}>
+          <button
+            type="button"
+            data-testid="agent-restart-bridge"
+            style={buttonStyle}
+            onClick={() => restartSidecar().catch(console.error)}
+          >
             Restart Bridge
           </button>
           <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
@@ -138,6 +146,21 @@ export function AgentView(): React.ReactElement {
         <Stat label="Commands" value={String(approvals.length)} />
         <Stat label="Session" value={snapshot?.session?.status ?? 'Not started'} />
       </div>
+
+      {snapshot?.sidecar.lastError && (
+        <div
+          data-testid="agent-sidecar-error"
+          style={{
+            padding: '10px 16px',
+            borderBottom: '1px solid var(--border)',
+            color: 'var(--red)',
+            fontSize: '11px',
+            background: 'rgba(239,68,68,0.08)',
+          }}
+        >
+          {snapshot.sidecar.lastError}
+        </div>
+      )}
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         <div
@@ -323,6 +346,7 @@ export function AgentView(): React.ReactElement {
                     <button
                       className="primary-button"
                       type="button"
+                      data-testid={`agent-approval-approve-${approval.id}`}
                       disabled={busyApprovalId === approval.id}
                       onClick={() => {
                         void handleApprovalAction(approval.id, 'approve');
@@ -333,6 +357,7 @@ export function AgentView(): React.ReactElement {
                     <button
                       className="secondary-button"
                       type="button"
+                      data-testid={`agent-approval-deny-${approval.id}`}
                       disabled={busyApprovalId === approval.id}
                       onClick={() => {
                         void handleApprovalAction(approval.id, 'deny');

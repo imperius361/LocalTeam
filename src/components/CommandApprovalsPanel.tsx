@@ -26,7 +26,7 @@ export function CommandApprovalsPanel({
   const settledApprovals = approvals.filter((approval) => approval.status !== 'pending');
 
   return (
-    <div className="panel">
+    <div className="panel" data-testid="command-approvals-panel">
       <div className="panel-header">
         <h2>Command Approvals</h2>
         <span>
@@ -64,6 +64,7 @@ export function CommandApprovalsPanel({
               <button
                 className="primary-button"
                 type="button"
+                data-testid={`approval-approve-${approval.id}`}
                 onClick={() => onApprove(approval.id)}
                 disabled={busyApprovalId === approval.id}
               >
@@ -72,6 +73,7 @@ export function CommandApprovalsPanel({
               <button
                 className="secondary-button"
                 type="button"
+                data-testid={`approval-deny-${approval.id}`}
                 onClick={() => onDeny(approval.id)}
                 disabled={busyApprovalId === approval.id}
               >

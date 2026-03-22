@@ -2,6 +2,7 @@ node_modules/
 target/
 dist/
 coverage/
+output/playwright/
 .superpowers/
 .localteam/
 .localteam-build/

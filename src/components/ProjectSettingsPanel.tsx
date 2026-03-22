@@ -51,6 +51,7 @@ export function ProjectSettingsPanel({
             <button
               className="secondary-button"
               type="button"
+              data-testid="settings-choose-workspace"
               onClick={onChooseWorkspace}
               disabled={loading || busy}
             >
@@ -59,6 +60,7 @@ export function ProjectSettingsPanel({
             <button
               className="secondary-button"
               type="button"
+              data-testid="settings-reload-workspace"
               onClick={onReloadWorkspace}
               disabled={loading || busy || !currentRoot}
             >

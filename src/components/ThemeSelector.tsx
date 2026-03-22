@@ -58,6 +58,8 @@ export function ThemeSelector() {
       flexDirection: 'column',
       gap: '12px',
       transition: 'border-color 0.15s ease',
+      textAlign: 'left',
+      appearance: 'none',
     };
   }
 
@@ -140,7 +142,7 @@ export function ThemeSelector() {
   );
 
   return (
-    <div style={overlay}>
+    <div style={overlay} data-testid="theme-selector">
       <div style={header}>
         <p style={title}>Choose Your Interface</p>
         <p style={subtitle}>You can change this later in settings</p>
@@ -148,7 +150,9 @@ export function ThemeSelector() {
 
       <div style={cardsRow}>
         {/* Obsidian card */}
-        <div
+        <button
+          type="button"
+          data-testid="theme-card-obsidian"
           style={cardStyle('obsidian', '#5865f2')}
           onMouseEnter={() => setHoveredCard('obsidian')}
           onMouseLeave={() => setHoveredCard(null)}
@@ -160,10 +164,12 @@ export function ThemeSelector() {
             <p style={cardSubtitle}>Developer Dark</p>
           </div>
           <p style={cardDescription}>Sharp, minimal. Built for focus.</p>
-        </div>
+        </button>
 
         {/* Pixel card */}
-        <div
+        <button
+          type="button"
+          data-testid="theme-card-pixel"
           style={cardStyle('pixel', '#4ecdc4')}
           onMouseEnter={() => setHoveredCard('pixel')}
           onMouseLeave={() => setHoveredCard(null)}
@@ -175,7 +181,7 @@ export function ThemeSelector() {
             <p style={cardSubtitle}>Retro Game UI</p>
           </div>
           <p style={cardDescription}>Chunky, colorful. Built for fun.</p>
-        </div>
+        </button>
       </div>
     </div>
   );

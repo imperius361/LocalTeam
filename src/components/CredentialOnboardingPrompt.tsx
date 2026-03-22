@@ -35,7 +35,12 @@ export function CredentialOnboardingPrompt({
         <button className="secondary-button" type="button" onClick={onSkip}>
           Continue without setup
         </button>
-        <button className="primary-button" type="button" onClick={onOpenSettings}>
+        <button
+          className="primary-button"
+          type="button"
+          data-testid="onboarding-open-settings"
+          onClick={onOpenSettings}
+        >
           Open Settings
         </button>
       </div>

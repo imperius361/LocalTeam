@@ -188,23 +188,29 @@ export function Topbar(): React.ReactElement {
                   {label}
                 </span>
               ) : (
-                <span
+                <button
+                  type="button"
+                  data-testid={`breadcrumb-${entry.layer}-${index}`}
                   style={{
                     fontSize: 11,
                     color: 'var(--text-secondary)',
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    font: 'inherit',
                   }}
                   onClick={() => navigateTo(index)}
                   onMouseEnter={(e) => {
-                    (e.currentTarget as HTMLSpanElement).style.color = 'var(--accent)';
+                    (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)';
                   }}
                   onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLSpanElement).style.color = 'var(--text-secondary)';
+                    (e.currentTarget as HTMLButtonElement).style.color = 'var(--text-secondary)';
                   }}
                 >
                   {label}
-                </span>
+                </button>
               )}
             </React.Fragment>
           );
@@ -225,6 +231,7 @@ export function Topbar(): React.ReactElement {
           <div style={sidecarDotStyle} title={sidecarReady ? 'Sidecar online' : 'Sidecar offline'} />
         </div>
         <button
+          data-testid="topbar-settings"
           style={settingsButtonStyle}
           onClick={() => {
             void handleTopbarSettingsClick();

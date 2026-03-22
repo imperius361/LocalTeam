@@ -43,11 +43,15 @@ export function TeamView(): React.ReactElement {
   const teamTasks = (snapshot?.tasks ?? []).filter((task) =>
     task.assignedAgents.some((agentId) => memberIds.includes(agentId)),
   );
-  const connectedMembers = memberIds.filter((id) => agentStatusMap[id]).length;
+  const connectedMembers = memberIds.filter(
+    (id) => agentStatusMap[id] && agentStatusMap[id].status !== 'unavailable',
+  ).length;
   const boundMembers = team?.members.filter((member) => member.runtimeProfileRef).length ?? 0;
   const pendingApprovals = approvals.filter((approval) => approval.status === 'pending').length;
   const activeSession =
-    snapshot?.session && (snapshot.session.teamId === teamId || (!snapshot.session.teamId && (snapshot.config?.teams.length ?? 0) === 1))
+    snapshot?.session &&
+    snapshot.session.status === 'running' &&
+    (snapshot.session.teamId === teamId || (!snapshot.session.teamId && (snapshot.config?.teams.length ?? 0) === 1))
       ? snapshot.session
       : null;
 
@@ -127,6 +131,7 @@ export function TeamView(): React.ReactElement {
 
   return (
     <div
+      data-testid="team-view"
       style={{
         display: 'flex',
         flex: 1,
@@ -160,6 +165,7 @@ export function TeamView(): React.ReactElement {
             <button
               className="secondary-button"
               type="button"
+              data-testid="team-apply"
               disabled={runtimeBusy}
               onClick={() => {
                 void handleApplyTeam();
@@ -170,6 +176,7 @@ export function TeamView(): React.ReactElement {
             <button
               className="primary-button"
               type="button"
+              data-testid="team-session-action"
               disabled={runtimeBusy}
               onClick={() => {
                 void handleSessionAction(activeSession ? 'stop' : 'start');
@@ -203,6 +210,7 @@ export function TeamView(): React.ReactElement {
                 <button
                   key={member.id}
                   type="button"
+                  data-testid={`team-member-${member.id}`}
                   onClick={() => navigate({ layer: 'agent', projectPath, teamId, agentId: member.id })}
                   style={{
                     ...panelStyle,

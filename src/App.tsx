@@ -6,6 +6,12 @@ import { useAppStore } from './store/appStore';
 import { getStatusSnapshot, initIpc, isSettingsWindow, loadProjectSnapshot, subscribeToNotifications, subscribeToWorkspaceSelections } from './lib/ipc';
 import type { SidecarNotification } from './lib/contracts';
 import { createOfflineSnapshot, formatWorkspaceError, loadAndStoreWorkspace } from './lib/workspace';
+import {
+  emitTestWorkspaceSelected,
+  getRuntimeContext,
+  shutdownTestApp,
+  triggerTestSidecarTermination,
+} from './lib/runtime-context';
 
 import { ThemeSelector } from './components/ThemeSelector';
 import { SettingsWindow } from './components/SettingsWindow';
@@ -52,9 +58,10 @@ function IpcSubscriber() {
         }
       } catch (error) {
         if (!disposed) {
-          setSnapshot(
+          patchSnapshot((snapshot) =>
             createOfflineSnapshot(
               formatWorkspaceError(error, 'Sidecar is not available.'),
+              snapshot,
             ),
           );
         }
@@ -84,7 +91,7 @@ function IpcSubscriber() {
           if (method === 'v1.sidecar.terminated') {
             const detail =
               typeof params.detail === 'string' ? params.detail : 'Sidecar terminated.';
-            setSnapshot(createOfflineSnapshot(detail));
+            patchSnapshot((snapshot) => createOfflineSnapshot(detail, snapshot));
             return;
           }
 
@@ -195,9 +202,10 @@ function IpcSubscriber() {
         await refreshSnapshot();
       } catch (error) {
         if (!disposed) {
-          setSnapshot(
+          patchSnapshot((snapshot) =>
             createOfflineSnapshot(
               formatWorkspaceError(error, 'Failed to initialize sidecar listeners.'),
+              snapshot,
             ),
           );
         }
@@ -217,6 +225,39 @@ function IpcSubscriber() {
     upsertLiveMessageDelta,
     upsertTask,
   ]);
+
+  return null;
+}
+
+function E2ETestHooks(): null {
+  useEffect(() => {
+    let disposed = false;
+
+    void (async () => {
+      const context = await getRuntimeContext();
+      if (!context.e2eMode || disposed) {
+        return;
+      }
+
+      window.__LOCALTEAM_E2E__ = {
+        context,
+        emitWorkspaceSelected: async (rootPath?: string) => {
+          await emitTestWorkspaceSelected(rootPath);
+        },
+        triggerSidecarTermination: async (detail?: string) => {
+          await triggerTestSidecarTermination(detail);
+        },
+        shutdownApp: async () => {
+          await shutdownTestApp();
+        },
+      };
+    })();
+
+    return () => {
+      disposed = true;
+      delete window.__LOCALTEAM_E2E__;
+    };
+  }, []);
 
   return null;
 }
@@ -322,6 +363,7 @@ export default function App(): React.ReactElement {
     return (
       <>
         <IpcSubscriber />
+        <E2ETestHooks />
         <WorkspaceSelectionSubscriber />
         <ThemeSelector />
       </>
@@ -329,8 +371,9 @@ export default function App(): React.ReactElement {
   }
 
   return (
-    <div data-theme={theme} className="app-root">
+    <div data-theme={theme} className="app-root" data-testid="app-root">
       <IpcSubscriber />
+      <E2ETestHooks />
       <WorkspaceSelectionSubscriber />
       <AppWindowContent />
     </div>

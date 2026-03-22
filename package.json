@@ -18,7 +18,9 @@
     "tauri": "tauri",
     "test": "npm run test:sidecar && npm run test:e2e",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:sidecar": "cd src-sidecar && npx vitest run"
+    "test:functional": "playwright test",
+    "test:functional:headed": "playwright test --headed",
+    "test:sidecar": "npm --prefix src-sidecar run test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -33,6 +35,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@tauri-apps/cli": "^2",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

@@ -102,6 +102,11 @@ export function Sidebar(): React.ReactElement {
     fontSize: 11,
     color: 'var(--text-secondary)',
     boxSizing: 'border-box',
+    background: 'none',
+    border: 'none',
+    width: '100%',
+    textAlign: 'left',
+    appearance: 'none',
   };
 
   const activeRowStyle: React.CSSProperties = {
@@ -143,7 +148,10 @@ export function Sidebar(): React.ReactElement {
         const isActiveTeam = isTeamActive && currentTeamId === team.id;
 
         return (
-          <div
+          <button
+            type="button"
+            data-testid={`sidebar-team-${team.id}`}
+            aria-current={isActiveTeam ? 'page' : undefined}
             key={team.id}
             style={isActiveTeam ? activeRowStyle : rowBaseStyle}
             onClick={() => handleTeamClick(team.id)}
@@ -167,7 +175,7 @@ export function Sidebar(): React.ReactElement {
             >
               {team.name}
             </span>
-          </div>
+          </button>
         );
       })}
 
@@ -190,7 +198,10 @@ export function Sidebar(): React.ReactElement {
           navState.layer === 'agent' && currentAgentId === agent.agentId;
 
         return (
-          <div
+          <button
+            type="button"
+            data-testid={`sidebar-agent-${agent.agentId}`}
+            aria-current={isActive ? 'page' : undefined}
             key={agent.agentId}
             style={isActive ? activeRowStyle : rowBaseStyle}
             onClick={() => handleAgentClick(agent.agentId, selectedTeam?.id ?? currentTeamId ?? '')}
@@ -206,7 +217,7 @@ export function Sidebar(): React.ReactElement {
             >
               {member.role}
             </span>
-          </div>
+          </button>
         );
       })}
 

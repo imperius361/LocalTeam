@@ -1,7 +1,8 @@
-use crate::sidecar;
+use crate::{e2e, sidecar};
 use serde_json::Value;
 use std::path::PathBuf;
 use tauri::AppHandle;
+use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 pub fn prompt_for_project_folder(
@@ -26,6 +27,10 @@ pub async fn pick_project_folder(
     app: AppHandle,
     starting_directory: Option<String>,
 ) -> Result<Option<String>, String> {
+    if e2e::is_e2e_mode() {
+        return Ok(app.state::<e2e::E2eState>().pick_project_folder(starting_directory));
+    }
+
     prompt_for_project_folder(&app, starting_directory)
 }
 
@@ -51,6 +56,12 @@ pub async fn send_to_sidecar(app: AppHandle, message: String) -> Result<(), Stri
         }
     }
 
+    if e2e::is_e2e_mode() {
+        return app
+            .state::<e2e::E2eState>()
+            .handle_sidecar_message(&app, &message);
+    }
+
     sidecar::write_to_sidecar(&app, &message)
 }
 
@@ -58,6 +69,10 @@ pub async fn send_to_sidecar(app: AppHandle, message: String) -> Result<(), Stri
 pub async fn restart_sidecar(
     app: AppHandle,
 ) -> Result<(), String> {
+    if e2e::is_e2e_mode() {
+        return app.state::<e2e::E2eState>().restart_sidecar(&app);
+    }
+
     sidecar::spawn_sidecar(&app)?;
     Ok(())
 }

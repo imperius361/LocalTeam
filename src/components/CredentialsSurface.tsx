@@ -33,7 +33,7 @@ export function CredentialsSurface({
   onClose,
 }: CredentialsSurfaceProps) {
   return (
-    <div className="settings-shell settings-window">
+    <div className="settings-shell settings-window" data-testid="settings-window">
       <div className="settings-topbar">
         <div>
           <p className="eyebrow">Settings</p>
@@ -46,6 +46,7 @@ export function CredentialsSurface({
             <button
               className="secondary-button"
               type="button"
+              data-testid="settings-runtime-action"
               onClick={onRuntimeAction}
               disabled={runtimeActionDisabled}
             >
@@ -53,7 +54,12 @@ export function CredentialsSurface({
             </button>
           )}
           {onClose && (
-            <button className="secondary-button" type="button" onClick={onClose}>
+            <button
+              className="secondary-button"
+              type="button"
+              data-testid="settings-close"
+              onClick={onClose}
+            >
               Close
             </button>
           )}

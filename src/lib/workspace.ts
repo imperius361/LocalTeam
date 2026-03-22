@@ -35,7 +35,34 @@ export function createRecentProjectEntry(
   };
 }
 
-export function createOfflineSnapshot(detail?: string): ProjectSnapshot {
+export function createOfflineSnapshot(
+  detail?: string,
+  previousSnapshot?: ProjectSnapshot | null,
+): ProjectSnapshot {
+  if (previousSnapshot) {
+    return {
+      ...previousSnapshot,
+      agentStatuses: previousSnapshot.agentStatuses.map((agent) => ({
+        ...agent,
+        status: 'unavailable',
+        ...(detail ? { lastError: detail } : {}),
+      })),
+      gateway: {
+        ready: false,
+        onboardingCompleted: previousSnapshot.gateway?.onboardingCompleted ?? false,
+        profileCount: previousSnapshot.runtimeProfiles?.length ?? previousSnapshot.gateway?.profileCount ?? 0,
+        workspaceRoot: previousSnapshot.projectRoot,
+        ...(detail ? { lastError: detail } : {}),
+      },
+      sidecar: {
+        ...previousSnapshot.sidecar,
+        ready: false,
+        version: previousSnapshot.sidecar.version || 'offline',
+        ...(detail ? { lastError: detail } : {}),
+      },
+    };
+  }
+
   return {
     version: 'v1',
     projectRoot: null,

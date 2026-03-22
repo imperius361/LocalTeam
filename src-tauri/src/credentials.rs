@@ -1,3 +1,4 @@
+use crate::e2e;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, read_to_string, write};
 use std::path::PathBuf;
@@ -26,7 +27,7 @@ struct NemoclawStateFile {
     last_error: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NemoclawStatus {
     pub onboarding_completed: bool,
@@ -76,11 +77,24 @@ fn current_nemoclaw_status(app: &AppHandle) -> Result<NemoclawStatus, String> {
 
 #[tauri::command]
 pub async fn nemoclaw_get_status(app: AppHandle) -> Result<NemoclawStatus, String> {
+    if e2e::is_e2e_mode() {
+        return serde_json::from_value(app.state::<e2e::E2eState>().nemoclaw_get_status())
+            .map_err(|error| format!("Failed to decode E2E Nemoclaw status: {error}"));
+    }
+
     current_nemoclaw_status(&app)
 }
 
 #[tauri::command]
 pub async fn nemoclaw_launch_onboarding(app: AppHandle) -> Result<NemoclawStatus, String> {
+    if e2e::is_e2e_mode() {
+        return serde_json::from_value(
+            app.state::<e2e::E2eState>()
+                .nemoclaw_launch_onboarding(&app)?,
+        )
+        .map_err(|error| format!("Failed to decode E2E Nemoclaw status: {error}"));
+    }
+
     let mut state = read_nemoclaw_state(&app)?;
     state.onboarding_completed = true;
     state.updated_at = SystemTime::now()

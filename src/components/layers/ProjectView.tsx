@@ -37,6 +37,7 @@ export function ProjectView(): React.ReactElement {
 
   return (
     <div
+      data-testid="project-view"
       style={{
         display: 'flex',
         gap: '16px',
@@ -85,6 +86,7 @@ export function ProjectView(): React.ReactElement {
                   <button
                     key={team.id}
                     type="button"
+                    data-testid={`project-team-${team.id}`}
                     onClick={() => navigate({ layer: 'team', projectPath, teamId: team.id })}
                     style={{
                       textAlign: 'left',

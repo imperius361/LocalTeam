@@ -81,6 +81,19 @@ const FALLBACK_DEFAULT_TEAM: ProjectConfig = normalizeProjectConfig({
   fileAccess: DEFAULT_FILE_ACCESS,
 });
 
+export function shouldIgnoreExternalChange(path: string): boolean {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+
+  return (
+    normalized === 'ebwebview'
+    || normalized.startsWith('ebwebview/')
+    || normalized.includes('/ebwebview/')
+    || normalized.startsWith('webview2/ebwebview/')
+    || normalized.startsWith('crashpad/')
+    || normalized.startsWith('.localteam/')
+  );
+}
+
 export class LocalTeamRuntime {
   private readonly startedAt = Date.now();
   private readonly defaultProjectRoot = resolveDefaultProjectRoot();

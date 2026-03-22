@@ -202,7 +202,7 @@ export function GlobalView(): React.ReactElement {
   };
 
   return (
-    <div style={pageStyle}>
+    <div style={pageStyle} data-testid="global-view">
       <div style={statRowStyle}>
         <div style={statBoxStyle}>
           <div style={labelStyle}>Configured Teams</div>
@@ -263,6 +263,7 @@ export function GlobalView(): React.ReactElement {
 
       {hasAlerts && (
         <div
+          data-testid="global-alerts"
           style={{
             background: pendingApprovals.length > 0 ? 'rgba(250,204,21,0.08)' : 'rgba(239,68,68,0.08)',
             border:
@@ -322,6 +323,7 @@ export function GlobalView(): React.ReactElement {
         <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
           <button
             type="button"
+            data-testid="global-open-workspace"
             onClick={() => {
               void openWorkspaceDialog();
             }}
@@ -331,6 +333,7 @@ export function GlobalView(): React.ReactElement {
           </button>
           <button
             type="button"
+            data-testid="global-open-legacy-config"
             onClick={() => {
               void openLegacyProjectDialog();
             }}
@@ -351,7 +354,9 @@ export function GlobalView(): React.ReactElement {
           const isHovered = hoveredPath === project.path;
 
           return (
-            <div
+            <button
+              type="button"
+              data-testid={`recent-project-${project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
               key={project.path}
               style={{
                 background: 'var(--bg-panel)',
@@ -361,6 +366,8 @@ export function GlobalView(): React.ReactElement {
                 position: 'relative',
                 boxSizing: 'border-box',
                 transition: 'border-color 0.15s ease',
+                textAlign: 'left',
+                appearance: 'none',
               }}
               onMouseEnter={() => setHoveredPath(project.path)}
               onMouseLeave={() => setHoveredPath(null)}
@@ -416,7 +423,7 @@ export function GlobalView(): React.ReactElement {
                   Loading…
                 </div>
               )}
-            </div>
+            </button>
           );
         })}
       </div>

@@ -35,7 +35,7 @@ test('shows pending approvals across global, team, and agent views and approves 
       .click();
 
     await expect(app.mainPage.getByText('No pending approvals for this member.')).toBeVisible();
-    await expect(app.mainPage.getByText('approved')).toBeVisible();
+    await expect(app.mainPage.getByText('approved • exit 0')).toBeVisible();
   } finally {
     await app.close();
     await cleanupRuntimeRoot(runtimeRoot);

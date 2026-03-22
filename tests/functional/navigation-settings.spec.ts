@@ -24,7 +24,7 @@ test('navigates project to team to agent and back through breadcrumbs and sideba
     );
 
     await goToAgent(app.mainPage);
-    await expect(app.mainPage.getByText('Implementation Engineer')).toBeVisible();
+    await expect(app.mainPage.getByText('Implementation Engineer').first()).toBeVisible();
     await expect(app.mainPage.getByText('Member Policy')).toBeVisible();
     await expect(app.mainPage.getByText('Session Activity')).toBeVisible();
     await expect(app.mainPage.getByTestId('sidebar-agent-implementer')).toHaveAttribute(
@@ -63,10 +63,10 @@ test('opens the settings window, completes runtime onboarding, and manages works
     await expect(settingsPage.getByText('Gateway online')).toBeVisible();
 
     await settingsPage.getByTestId('settings-choose-workspace').click();
-    await expect(settingsPage.getByText(app.workspace)).toBeVisible();
+    await expect(settingsPage.getByText(app.workspace).first()).toBeVisible();
 
     await settingsPage.getByTestId('settings-reload-workspace').click();
-    await expect(settingsPage.getByText('Operations Alpha')).toBeVisible();
+    await expect(settingsPage.getByText('Operations Alpha').first()).toBeVisible();
     await expect(settingsPage.getByText('3 members')).toBeVisible();
   } finally {
     await app.close();

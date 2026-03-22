@@ -147,7 +147,7 @@ export function AgentView(): React.ReactElement {
         <Stat label="Session" value={snapshot?.session?.status ?? 'Not started'} />
       </div>
 
-      {snapshot?.sidecar.lastError && (
+      {snapshot?.sidecar.lastError ? (
         <div
           data-testid="agent-sidecar-error"
           style={{
@@ -160,7 +160,18 @@ export function AgentView(): React.ReactElement {
         >
           {snapshot.sidecar.lastError}
         </div>
-      )}
+      ) : snapshot?.sidecar.ready ? (
+        <div
+          style={{
+            padding: '10px 16px',
+            borderBottom: '1px solid var(--border)',
+            fontSize: '11px',
+            color: 'var(--text-muted)',
+          }}
+        >
+          Bridge is healthy and streaming activity.
+        </div>
+      ) : null}
 
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
         <div

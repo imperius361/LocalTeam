@@ -6,6 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 import initSqlJs from 'sql.js/dist/sql-asm.js';
 import type { Database, SqlJsStatic } from 'sql.js';
 import type { ProjectConfig } from './types.js';
+import { normalizeProjectConfig } from './team-config.js';
 import { canonicalizeWorkspacePath } from './workspace-path.js';
 import type {
   AgentMessage,
@@ -458,7 +459,7 @@ export async function readWorkspaceConfig(
   const configPath = resolveWorkspaceConfigPath(workspaceRoot);
   try {
     const raw = await readFile(configPath, 'utf8');
-    return JSON.parse(raw) as ProjectConfig;
+    return normalizeProjectConfig(JSON.parse(raw));
   } catch (error) {
     if (isMissingFileError(error)) {
       return null;

@@ -30,7 +30,7 @@ export function createRecentProjectEntry(
 
   return {
     path: snapshot.projectRoot,
-    name: snapshot.config?.team?.name ?? snapshot.projectRoot,
+    name: getProjectDisplayName(snapshot) ?? snapshot.projectRoot,
     lastOpenedAt: openedAt,
   };
 }
@@ -48,6 +48,16 @@ export function createOfflineSnapshot(detail?: string): ProjectSnapshot {
     credentials: [],
     templates: [],
     commandApprovals: [],
+    gateway: {
+      ready: false,
+      onboardingCompleted: false,
+      profileCount: 0,
+      workspaceRoot: null,
+    },
+    runtimeProfiles: [],
+    sessions: [],
+    approvals: [],
+    activeTeamId: null,
     sidecar: {
       ready: false,
       version: 'offline',
@@ -91,4 +101,16 @@ export async function loadAndStoreWorkspace(
   }
 
   return snapshot;
+}
+
+function getProjectDisplayName(snapshot: ProjectSnapshot): string | null {
+  const config = snapshot.config;
+  if (!config) {
+    return null;
+  }
+
+  const defaultTeam = config.defaultTeamId
+    ? config.teams.find((team) => team.id === config.defaultTeamId)
+    : null;
+  return defaultTeam?.name ?? config.teams[0]?.name ?? null;
 }

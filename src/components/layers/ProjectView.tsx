@@ -1,63 +1,31 @@
 import React from 'react';
-import { useState } from 'react';
+
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';
-import { callSidecar } from '../../lib/ipc';
-import { countActiveRequestTasks } from '../../lib/taskSelectors';
 
 function formatTime(ts: number): string {
-  const d = new Date(ts);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mm}:${ss}`;
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(ts);
 }
-
-const TYPE_COLORS: Record<string, string> = {
-  proposal: 'var(--cyan)',
-  objection: 'var(--red)',
-  consensus: 'var(--green)',
-  discussion: 'var(--text-muted)',
-  system: 'var(--text-muted)',
-  artifact: 'var(--yellow)',
-  user: 'var(--accent)',
-};
 
 export function ProjectView(): React.ReactElement {
   const { navState, navigate } = useNav();
   const snapshot = useAppStore((s) => s.snapshot);
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [dispatching, setDispatching] = useState(false);
-  const [teamHovered, setTeamHovered] = useState(false);
+  const teamMap = useAppStore((s) => s.teamMap);
 
   const projectPath = navState.layer === 'project' ? navState.projectPath : '';
-
-  const agentStatuses = snapshot?.agentStatuses ?? [];
-  const tasks = snapshot?.tasks ?? [];
-  const messages = snapshot?.messages ?? [];
-  const team = snapshot?.config?.team ?? null;
-
-  const activeTasks = countActiveRequestTasks(tasks);
-
-  const sortedMessages = [...messages]
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, 20);
-
-  async function handleDispatch(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim()) return;
-    setDispatching(true);
-    try {
-      await callSidecar('v1.task.create', { title: title.trim(), description: description.trim() });
-      setTitle('');
-      setDescription('');
-    } catch (err) {
-      console.error('Failed to dispatch task:', err);
-    } finally {
-      setDispatching(false);
-    }
-  }
+  const config = snapshot?.config ?? null;
+  const teams = config?.teams ?? [];
+  const session = snapshot?.session ?? null;
+  const approvals = snapshot?.commandApprovals ?? [];
+  const pendingApprovals = approvals.filter((approval) => approval.status === 'pending');
+  const recentMessages = [...(snapshot?.messages ?? [])]
+    .sort((left, right) => right.timestamp - left.timestamp)
+    .slice(0, 16);
+  const defaultTeamId = config?.defaultTeamId ?? null;
 
   const sectionHeaderStyle: React.CSSProperties = {
     fontSize: '9px',
@@ -65,18 +33,6 @@ export function ProjectView(): React.ReactElement {
     letterSpacing: '2px',
     color: 'var(--text-muted)',
     marginBottom: '8px',
-  };
-
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    background: 'var(--bg-raised)',
-    border: 'var(--border-width) solid var(--border)',
-    padding: '6px 8px',
-    color: 'var(--text-primary)',
-    fontFamily: 'var(--font-sans)',
-    fontSize: '12px',
-    boxSizing: 'border-box',
-    outline: 'none',
   };
 
   return (
@@ -91,171 +47,219 @@ export function ProjectView(): React.ReactElement {
         overflow: 'hidden',
       }}
     >
-      {/* Left column */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '20px', overflowY: 'auto', minWidth: 0 }}>
-        {/* Teams section */}
-        <div>
-          <div style={sectionHeaderStyle}>Teams</div>
-
-          {team ? (
-            <div
-              onClick={() =>
-                navigate({ layer: 'team', projectPath, teamId: team.name })
-              }
-              onMouseEnter={() => setTeamHovered(true)}
-              onMouseLeave={() => setTeamHovered(false)}
-              style={{
-                background: 'var(--bg-panel)',
-                border: `var(--border-width) solid ${teamHovered ? 'var(--accent)' : 'var(--border)'}`,
-                padding: '14px',
-                cursor: 'pointer',
-                boxSizing: 'border-box',
-                transition: 'border-color 0.15s ease',
-              }}
-            >
-              {/* Team name */}
-              <div style={{ fontSize: '14px', fontWeight: 600, marginBottom: '8px' }}>
-                {team.name}
-              </div>
-
-              {/* Agent pips row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginBottom: '6px', flexWrap: 'wrap' }}>
-                {agentStatuses.map((a) => {
-                  let color = 'var(--text-muted)';
-                  if (a.status === 'unavailable') color = 'var(--red)';
-                  else if (a.status !== 'idle') color = 'var(--yellow)';
-                  else color = 'var(--green)';
-                  return (
-                    <div
-                      key={a.agentId}
-                      title={a.role}
-                      style={{
-                        width: '7px',
-                        height: '7px',
-                        borderRadius: '50%',
-                        background: color,
-                        flexShrink: 0,
-                      }}
-                    />
-                  );
-                })}
-              </div>
-
-              {/* Counts row */}
-              <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--text-muted)' }}>
-                <span>{agentStatuses.length} agents</span>
-                {activeTasks > 0 && (
-                  <span style={{ color: 'var(--yellow)' }}>{activeTasks} active</span>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              No team configured.
-            </div>
-          )}
-        </div>
-
-        {/* Task submission form */}
-        <div>
-          <div style={sectionHeaderStyle}>Assign Task</div>
-          <form onSubmit={handleDispatch} style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <input
-              type="text"
-              placeholder="Task title"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              style={inputStyle}
-            />
-            <textarea
-              placeholder="Description (optional)"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              style={{ ...inputStyle, height: '80px', resize: 'none' }}
-            />
-            <button
-              type="submit"
-              disabled={dispatching || !title.trim()}
-              onMouseEnter={(e) => {
-                if (!dispatching && title.trim()) {
-                  (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent)';
-                  (e.currentTarget as HTMLButtonElement).style.color = 'white';
-                }
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLButtonElement).style.background = 'var(--accent-dim)';
-                (e.currentTarget as HTMLButtonElement).style.color = 'var(--accent)';
-              }}
-              style={{
-                background: 'var(--accent-dim)',
-                color: 'var(--accent)',
-                border: 'var(--border-width) solid var(--accent)',
-                width: '100%',
-                fontSize: '11px',
-                textTransform: 'uppercase',
-                cursor: dispatching ? 'not-allowed' : 'pointer',
-                padding: '7px 0',
-                letterSpacing: '1px',
-                fontFamily: 'var(--font-sans)',
-                transition: 'background 0.15s ease, color 0.15s ease',
-                opacity: !title.trim() ? 0.5 : 1,
-              }}
-            >
-              {dispatching ? 'Dispatching…' : '↵ Dispatch'}
-            </button>
-          </form>
-        </div>
-      </div>
-
-      {/* Right column: Activity Feed */}
       <div
         style={{
-          width: '300px',
+          flex: 1.25,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '20px',
+          overflowY: 'auto',
+          minWidth: 0,
+        }}
+      >
+        <section>
+          <div style={sectionHeaderStyle}>Project Teams</div>
+          {teams.length === 0 ? (
+            <div style={emptyStateStyle}>No teams are configured for this project yet.</div>
+          ) : (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
+                gap: '12px',
+              }}
+            >
+              {teams.map((team) => {
+                const statuses = team.members
+                  .map((member) => snapshot?.agentStatuses.find((status) => status.agentId === member.id))
+                  .filter((status): status is NonNullable<typeof status> => Boolean(status));
+                const boundMembers = team.members.filter((member) => member.runtimeProfileRef).length;
+                const memberActivity = recentMessages.filter((message) =>
+                  team.members.some((member) => member.id === message.agentId),
+                );
+                const isDefault = defaultTeamId === team.id;
+                const isSessionTarget =
+                  session?.teamId === team.id || (!session?.teamId && teams.length === 1);
+
+                return (
+                  <button
+                    key={team.id}
+                    type="button"
+                    onClick={() => navigate({ layer: 'team', projectPath, teamId: team.id })}
+                    style={{
+                      textAlign: 'left',
+                      background: 'var(--bg-panel)',
+                      border: 'var(--border-width) solid var(--border)',
+                      padding: '14px',
+                      cursor: 'pointer',
+                      boxSizing: 'border-box',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '10px',
+                        marginBottom: '8px',
+                      }}
+                    >
+                      <strong style={{ fontSize: '14px' }}>{team.name}</strong>
+                      <span style={chipStyle(isSessionTarget ? 'var(--green)' : 'var(--text-muted)')}>
+                        {isSessionTarget ? 'Session target' : isDefault ? 'Default team' : 'Configured'}
+                      </span>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '12px', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                      <span>{team.members.length} members</span>
+                      <span>{boundMembers} bound</span>
+                      <span>{statuses.filter((status) => status.status !== 'unavailable').length} connected</span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+                      {team.members.map((member) => {
+                        const status = snapshot?.agentStatuses.find((entry) => entry.agentId === member.id);
+                        return (
+                          <span
+                            key={member.id}
+                            style={chipStyle(
+                              status?.status === 'unavailable'
+                                ? 'var(--red)'
+                                : member.runtimeProfileRef
+                                  ? 'var(--accent)'
+                                  : 'var(--text-muted)',
+                            )}
+                          >
+                            {member.role}
+                          </span>
+                        );
+                      })}
+                    </div>
+
+                    <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                      {memberActivity[0]
+                        ? `${memberActivity[0].agentRole} • ${trimText(memberActivity[0].content, 90)}`
+                        : 'No recent team activity yet.'}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <div style={sectionHeaderStyle}>Project Runtime Policy</div>
+          <div style={panelStyle}>
+            <div style={summaryGridStyle}>
+              <Metric label="Workspace mode" value={teams[0]?.workspaceMode ?? 'shared_project'} />
+              <Metric label="Default team" value={teamMap[defaultTeamId ?? '']?.name ?? teams[0]?.name ?? 'None'} />
+              <Metric label="Sandbox" value={config?.sandbox.defaultMode ?? 'direct'} />
+              <Metric label="Denied paths" value={String(config?.fileAccess.denyList.length ?? 0)} />
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div
+        style={{
+          width: '320px',
           flexShrink: 0,
           display: 'flex',
           flexDirection: 'column',
+          gap: '14px',
           overflow: 'hidden',
         }}
       >
-        <div style={sectionHeaderStyle}>Activity Feed</div>
+        <section style={panelStyle}>
+          <div className="panel-header">
+            <h3>Gateway Health</h3>
+            <span>{snapshot?.sidecar.ready ? 'Online' : 'Offline'}</span>
+          </div>
+          <div style={{ display: 'grid', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+            <div>Project path: {projectPath || 'Not loaded'}</div>
+            <div>Session: {session ? session.status : 'Not started'}</div>
+            <div>Pending approvals: {pendingApprovals.length}</div>
+            <div>Live members: {snapshot?.agentStatuses.length ?? 0}</div>
+            {snapshot?.sidecar.lastError && (
+              <div style={{ color: 'var(--red)' }}>{snapshot.sidecar.lastError}</div>
+            )}
+          </div>
+        </section>
 
-        <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-          {sortedMessages.length === 0 ? (
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              No activity yet — dispatch a task to get started
-            </div>
-          ) : (
-            sortedMessages.map((msg) => {
-              const badgeColor = TYPE_COLORS[msg.type] ?? 'var(--text-muted)';
-              const truncated =
-                msg.content.length > 80
-                  ? msg.content.slice(0, 80) + '…'
-                  : msg.content;
-              return (
-                <div
-                  key={msg.id}
-                  style={{ fontSize: '11px', lineHeight: '1.4', borderBottom: '1px solid var(--border)', paddingBottom: '5px' }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '2px' }}>
-                    <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', flexShrink: 0 }}>
-                      {formatTime(msg.timestamp)}
-                    </span>
-                    <span style={{ color: badgeColor, textTransform: 'uppercase', fontSize: '9px', letterSpacing: '1px', flexShrink: 0 }}>
-                      {msg.type}
-                    </span>
-                    <span style={{ fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {msg.agentRole}
-                    </span>
+        <section style={{ ...panelStyle, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <div className="panel-header">
+            <h3>Recent Activity</h3>
+            <span>{recentMessages.length} entries</span>
+          </div>
+          <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {recentMessages.length === 0 ? (
+              <div style={emptyStateStyle}>No runtime activity has been recorded for this project yet.</div>
+            ) : (
+              recentMessages.map((message) => (
+                <div key={message.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
+                  <div style={{ display: 'flex', gap: '6px', marginBottom: '4px', fontSize: '10px', color: 'var(--text-muted)' }}>
+                    <span>{formatTime(message.timestamp)}</span>
+                    <span>{message.agentRole}</span>
+                    <span>{message.type}</span>
                   </div>
-                  <div style={{ color: 'var(--text-secondary)', wordBreak: 'break-word' }}>
-                    {truncated}
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    {trimText(message.content, 120)}
                   </div>
                 </div>
-              );
-            })
-          )}
-        </div>
+              ))
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
+}
+
+function Metric({ label, value }: { label: string; value: string }): React.ReactElement {
+  return (
+    <div>
+      <div style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+        {label}
+      </div>
+      <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>{value}</div>
+    </div>
+  );
+}
+
+function trimText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+}
+
+const panelStyle: React.CSSProperties = {
+  background: 'var(--bg-panel)',
+  border: 'var(--border-width) solid var(--border)',
+  padding: '14px',
+  boxSizing: 'border-box',
+};
+
+const summaryGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: '12px',
+};
+
+const emptyStateStyle: React.CSSProperties = {
+  fontSize: '11px',
+  color: 'var(--text-muted)',
+};
+
+function chipStyle(color: string): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '2px 8px',
+    border: `1px solid ${color}`,
+    color,
+    fontSize: '10px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.8px',
+    background: 'transparent',
+  };
 }

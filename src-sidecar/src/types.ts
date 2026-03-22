@@ -1,21 +1,35 @@
+import type {
+  NemoclawApprovalSummary,
+  NemoclawGatewayStatus,
+  NemoclawSessionSummary,
+  RuntimeProfileSummary,
+} from './gateway-types.js';
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
 }
 
-export type ProviderId = 'anthropic' | 'openai' | 'mock';
+export interface RuntimeHint {
+  provider?: string;
+  model?: string;
+}
 
-export interface AgentConfig {
+export type ProviderId = string;
+
+export interface TeamMemberConfig {
   id: string;
   role: string;
-  model: string;
-  provider: ProviderId;
   systemPrompt: string;
+  runtimeProfileRef: string | null;
+  runtimeHint?: RuntimeHint;
   tools?: string[];
   allowedPaths?: string[];
   canExecuteCommands?: boolean;
   preApprovedCommands?: string[];
 }
+
+export type AgentConfig = TeamMemberConfig;
 
 export type AgentMessageType =
   | 'discussion'
@@ -96,8 +110,10 @@ export interface ConsensusConfig {
 }
 
 export interface TeamDefinition {
+  id: string;
   name: string;
-  agents: AgentConfig[];
+  workspaceMode: 'shared_project';
+  members: TeamMemberConfig[];
 }
 
 export interface SandboxConfig {
@@ -110,8 +126,10 @@ export interface FileAccessConfig {
 }
 
 export interface ProjectConfig {
-  team: TeamDefinition;
-  consensus: ConsensusConfig;
+  version: 2;
+  defaultTeamId: string | null;
+  teams: TeamDefinition[];
+  consensus?: ConsensusConfig;
   sandbox: SandboxConfig;
   fileAccess: FileAccessConfig;
 }
@@ -129,7 +147,8 @@ export interface AgentStatus {
   agentId: string;
   role: string;
   model: string;
-  provider: ProviderId;
+  provider: string;
+  backend: 'nemoclaw';
   status: AgentRuntimeState;
   hasCredentials: boolean;
   lastError?: string;
@@ -154,13 +173,14 @@ export interface SessionState {
   id: string;
   projectRoot: string;
   projectName: string;
+  teamId?: string;
   createdAt: number;
   updatedAt: number;
   status: 'idle' | 'running' | 'awaiting_user';
 }
 
 export interface ProviderCredentialStatus {
-  provider: Exclude<ProviderId, 'mock'>;
+  provider: string;
   hasKey: boolean;
   syncedAt?: number;
 }
@@ -170,7 +190,7 @@ export interface TemplateSummary {
   name: string;
   description: string;
   path: string;
-  providers: ProviderId[];
+  runtimeProfiles: string[];
 }
 
 export interface MessageStreamDelta {
@@ -257,6 +277,11 @@ export interface ProjectSnapshot {
   credentials: ProviderCredentialStatus[];
   templates: TemplateSummary[];
   commandApprovals: CommandApproval[];
+  gateway?: NemoclawGatewayStatus;
+  runtimeProfiles?: RuntimeProfileSummary[];
+  sessions?: NemoclawSessionSummary[];
+  approvals?: NemoclawApprovalSummary[];
+  activeTeamId?: string | null;
   sidecar: {
     ready: boolean;
     version: string;

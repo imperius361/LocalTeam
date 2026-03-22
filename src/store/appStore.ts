@@ -1,7 +1,13 @@
 import { create } from 'zustand';
 import type {
-  ProjectSnapshot, AgentStatus, Task, AgentMessage,
-  MessageStreamDelta, RecentProject
+  ProjectSnapshot,
+  AgentStatus,
+  Task,
+  AgentMessage,
+  MessageStreamDelta,
+  RecentProject,
+  TeamConfig,
+  CommandApproval,
 } from './types';
 
 const RECENTS_KEY = 'localteam.recents';
@@ -17,9 +23,12 @@ interface AppStore {
 
   // Derived lookup maps (rebuilt on each snapshot/upsert)
   agentStatusMap: Record<string, AgentStatus>;   // agentId → status
+  teamMap: Record<string, TeamConfig>;           // teamId → team config
   taskMap: Record<string, Task>;                  // taskId → task
   messagesByTask: Record<string, AgentMessage[]>; // taskId → messages[]
+  messagesByAgent: Record<string, AgentMessage[]>; // agentId → messages[]
   liveMessageDeltas: Record<string, MessageStreamDelta>; // messageId -> delta
+  approvalsByAgent: Record<string, CommandApproval[]>; // agentId → approvals[]
 
   // Actions
   setSnapshot: (s: ProjectSnapshot) => void;
@@ -42,9 +51,12 @@ function buildSnapshotState(snapshot: ProjectSnapshot | null) {
       snapshot: null,
       activeProjectPath: null,
       agentStatusMap: {},
+      teamMap: {},
       taskMap: {},
       messagesByTask: {},
+      messagesByAgent: {},
       liveMessageDeltas: {},
+      approvalsByAgent: {},
     };
   }
 
@@ -53,27 +65,49 @@ function buildSnapshotState(snapshot: ProjectSnapshot | null) {
     agentStatusMap[status.agentId] = status;
   }
 
+  const teamMap: Record<string, TeamConfig> = {};
+  for (const team of snapshot.config?.teams ?? []) {
+    teamMap[team.id] = team;
+  }
+
   const taskMap: Record<string, Task> = {};
   for (const task of snapshot.tasks) {
     taskMap[task.id] = task;
   }
 
   const messagesByTask: Record<string, AgentMessage[]> = {};
+  const messagesByAgent: Record<string, AgentMessage[]> = {};
   for (const msg of snapshot.messages) {
-    const key = msg.taskId ?? '';
-    if (!messagesByTask[key]) {
-      messagesByTask[key] = [];
+    const taskKey = msg.taskId ?? '';
+    if (!messagesByTask[taskKey]) {
+      messagesByTask[taskKey] = [];
     }
-    messagesByTask[key].push(msg);
+    messagesByTask[taskKey].push(msg);
+
+    if (!messagesByAgent[msg.agentId]) {
+      messagesByAgent[msg.agentId] = [];
+    }
+    messagesByAgent[msg.agentId].push(msg);
+  }
+
+  const approvalsByAgent: Record<string, CommandApproval[]> = {};
+  for (const approval of snapshot.commandApprovals) {
+    if (!approvalsByAgent[approval.agentId]) {
+      approvalsByAgent[approval.agentId] = [];
+    }
+    approvalsByAgent[approval.agentId].push(approval);
   }
 
   return {
     snapshot,
     activeProjectPath: snapshot.projectRoot,
     agentStatusMap,
+    teamMap,
     taskMap,
     messagesByTask,
+    messagesByAgent,
     liveMessageDeltas: {},
+    approvalsByAgent,
   };
 }
 
@@ -82,9 +116,12 @@ export const useAppStore = create<AppStore>()((set, get) => ({
   activeProjectPath: null,
   snapshot: null,
   agentStatusMap: {},
+  teamMap: {},
   taskMap: {},
   messagesByTask: {},
+  messagesByAgent: {},
   liveMessageDeltas: {},
+  approvalsByAgent: {},
 
   setSnapshot: (s: ProjectSnapshot) => {
     set(buildSnapshotState(s));
@@ -136,11 +173,16 @@ export const useAppStore = create<AppStore>()((set, get) => ({
   },
 
   appendMessage: (m: AgentMessage) => {
-    const { snapshot, messagesByTask, liveMessageDeltas } = get();
+    const { snapshot, messagesByTask, messagesByAgent, liveMessageDeltas } = get();
 
     const key = m.taskId ?? '';
     const existing = messagesByTask[key] ?? [];
     const newMessagesByTask = { ...messagesByTask, [key]: [...existing, m] };
+    const existingAgentMessages = messagesByAgent[m.agentId] ?? [];
+    const newMessagesByAgent = {
+      ...messagesByAgent,
+      [m.agentId]: [...existingAgentMessages, m],
+    };
     const newLiveMessageDeltas = { ...liveMessageDeltas };
     delete newLiveMessageDeltas[m.id];
 
@@ -151,6 +193,7 @@ export const useAppStore = create<AppStore>()((set, get) => ({
 
     set({
       messagesByTask: newMessagesByTask,
+      messagesByAgent: newMessagesByAgent,
       liveMessageDeltas: newLiveMessageDeltas,
       snapshot: newSnapshot,
     });

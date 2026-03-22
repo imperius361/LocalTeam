@@ -1,103 +1,126 @@
-import type { FormEvent } from 'react';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 
 import { useAppStore } from '../store/appStore';
-import { clearProviderKey, createVault, getCredentialStatus, lockVault, saveProviderKeys, subscribeToCredentialEvents, unlockVault, type CredentialStatus } from '../lib/credentials';
-import { closeCurrentWindow, loadProjectSnapshot, pickProjectFolder } from '../lib/ipc';
+import {
+  closeCurrentWindow,
+  getStatusSnapshot,
+  loadProjectSnapshot,
+  pickProjectFolder,
+} from '../lib/ipc';
 import { formatWorkspaceError, loadAndStoreWorkspace } from '../lib/workspace';
+import { launchNemoclawOnboarding } from '../lib/nemoclaw';
 
 import type { CredentialSummaryRow } from './CredentialsSummaryPanel';
 import { CredentialsSurface } from './CredentialsSurface';
 import { ProjectSettingsPanel } from './ProjectSettingsPanel';
-
-const DEFAULT_CREDENTIAL_STATUS: CredentialStatus = {
-  unlocked: false,
-  vaultExists: false,
-  providers: [
-    { provider: 'openai', hasKey: false },
-    { provider: 'anthropic', hasKey: false },
-  ],
-};
-const MANAGED_PROVIDERS: CredentialSummaryRow['provider'][] = ['openai', 'anthropic'];
 
 export function SettingsWindow(): React.ReactElement {
   const snapshot = useAppStore((s) => s.snapshot);
   const setSnapshot = useAppStore((s) => s.setSnapshot);
   const addRecentProject = useAppStore((s) => s.addRecentProject);
   const setActiveProjectPath = useAppStore((s) => s.setActiveProjectPath);
-  const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>(DEFAULT_CREDENTIAL_STATUS);
-  const [credentialsLoading, setCredentialsLoading] = useState(true);
-  const [credentialsError, setCredentialsError] = useState<string | null>(null);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
-  const [vaultPassword, setVaultPassword] = useState('');
-  const [openaiKey, setOpenaiKey] = useState('');
-  const [anthropicKey, setAnthropicKey] = useState('');
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
 
   const currentRoot = snapshot?.projectRoot ?? null;
   const config = snapshot?.config ?? null;
-
-  useEffect(() => {
-    let disposed = false;
-    let unsubscribe = () => {};
-
-    void (async () => {
-      try {
-        const status = await getCredentialStatus();
-        if (!disposed) {
-          setCredentialStatus(status);
-          setCredentialsError(null);
-        }
-      } catch (error) {
-        if (!disposed) {
-          setCredentialsError(formatWorkspaceError(error, 'Failed to load credential status.'));
-        }
-      } finally {
-        if (!disposed) {
-          setCredentialsLoading(false);
-        }
-      }
-
-      unsubscribe = await subscribeToCredentialEvents((event) => {
-        if (event.type === 'status') {
-          setCredentialStatus(event.status);
-        }
-      });
-    })();
-
-    return () => {
-      disposed = true;
-      unsubscribe();
-    };
-  }, []);
+  const teams = config?.teams ?? [];
+  const members = teams.flatMap((team) => team.members);
 
   const credentialRows = useMemo<CredentialSummaryRow[]>(() => {
-    const storedByProvider = new Map(
-      credentialStatus.providers.map((provider) => [provider.provider, provider.hasKey]),
+    const runtimeProfiles = new Map(
+      (snapshot?.runtimeProfiles ?? []).map((profile) => [profile.id, profile]),
     );
-    const runtimeByProvider = new Map(
-      (snapshot?.credentials ?? []).map((provider) => [provider.provider, provider.hasKey]),
-    );
-    const requiredProviders = new Set(
-      snapshot?.config?.team.agents
-        .map((agent) => agent.provider)
-        .filter((provider) => provider === 'openai' || provider === 'anthropic') ?? [],
-    );
+    const groups = new Map<string, CredentialSummaryRow>();
 
-    return MANAGED_PROVIDERS.map((provider) => ({
-      provider,
-      hasStoredKey: storedByProvider.get(provider) ?? false,
-      hasRuntimeKey: runtimeByProvider.get(provider) ?? false,
-      required: requiredProviders.has(provider),
-    }));
-  }, [credentialStatus.providers, snapshot?.config?.team.agents, snapshot?.credentials]);
+    for (const member of members) {
+      const runtimeRef = member.runtimeProfileRef?.trim() || null;
+      const runtimeProfile = runtimeRef ? runtimeProfiles.get(runtimeRef) : null;
+      const fallbackLabel = member.runtimeHint?.provider || member.runtimeHint?.model
+        ? `${member.runtimeHint?.provider ?? 'provider'} / ${member.runtimeHint?.model ?? 'model'}`
+        : 'Unbound runtime profile';
+      const key = runtimeRef ?? `unbound:${member.id}`;
+      const existing = groups.get(key);
+      const nextState: CredentialSummaryRow['state'] = runtimeRef
+        ? runtimeProfile?.availability === 'ready'
+          ? 'connected'
+          : 'configured'
+        : 'unbound';
 
-  const statusLabel = credentialStatus.unlocked
-    ? 'Vault unlocked'
-    : credentialStatus.vaultExists
-      ? 'Vault locked'
-      : 'Vault not set up';
-  const canSave = Boolean(openaiKey.trim() || anthropicKey.trim());
+      if (existing) {
+        existing.assignedMembers += 1;
+        existing.detail = `${existing.assignedMembers} members`;
+        if (existing.state !== 'connected' && nextState === 'connected') {
+          existing.state = 'connected';
+        } else if (existing.state === 'unbound' && nextState === 'configured') {
+          existing.state = 'configured';
+        }
+        continue;
+      }
+
+      groups.set(key, {
+        id: key,
+        label: runtimeProfile?.label ?? runtimeRef ?? fallbackLabel,
+        assignedMembers: 1,
+        state: nextState,
+        detail: runtimeRef
+          ? runtimeProfile
+            ? `${runtimeProfile.provider} / ${runtimeProfile.model} • 1 member`
+            : '1 member'
+          : member.runtimeHint?.provider || member.runtimeHint?.model
+            ? `Needs profile binding (${fallbackLabel})`
+            : 'Needs runtime profile binding',
+      });
+    }
+
+    return Array.from(groups.values()).sort((left, right) => left.label.localeCompare(right.label));
+  }, [members, snapshot?.runtimeProfiles]);
+
+  const runtimeStats = useMemo(
+    () => [
+      {
+        label: 'Gateway bridge',
+        value: snapshot?.gateway?.ready ? 'Online' : 'Pending onboarding',
+      },
+      {
+        label: 'Configured teams',
+        value: String(teams.length),
+      },
+      {
+        label: 'Runtime profiles',
+        value: String(snapshot?.runtimeProfiles?.length ?? 0),
+      },
+      {
+        label: 'Active team',
+        value:
+          teams.find((team) => team.id === snapshot?.activeTeamId)?.name ??
+          snapshot?.activeTeamId ??
+          'None',
+      },
+      {
+        label: 'Live sessions',
+        value: String(snapshot?.sessions?.length ?? 0),
+      },
+      {
+        label: 'Pending approvals',
+        value: String(
+          (snapshot?.approvals ?? []).filter((approval) => approval.status === 'pending').length,
+        ),
+      },
+    ],
+    [
+      snapshot?.activeTeamId,
+      snapshot?.approvals,
+      snapshot?.gateway?.ready,
+      snapshot?.runtimeProfiles,
+      snapshot?.sessions,
+      teams,
+    ],
+  );
+
+  const statusLabel = snapshot?.gateway?.ready ? 'Gateway online' : 'Gateway needs onboarding';
 
   async function refreshWorkspace(rootPath: string): Promise<void> {
     setWorkspaceBusy(true);
@@ -138,64 +161,29 @@ export function SettingsWindow(): React.ReactElement {
     await refreshWorkspace(currentRoot);
   }
 
+  async function handleLaunchRuntimeOnboarding(): Promise<void> {
+    setRuntimeBusy(true);
+    setRuntimeError(null);
+
+    try {
+      await launchNemoclawOnboarding();
+      const refreshed = currentRoot
+        ? await loadProjectSnapshot(currentRoot)
+        : await getStatusSnapshot();
+      setSnapshot(refreshed);
+    } catch (error) {
+      setRuntimeError(formatWorkspaceError(error, 'Failed to initialize Nemoclaw.'));
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
   async function handleOpenSettingsClose(): Promise<void> {
     try {
       await closeCurrentWindow();
     } catch (error) {
       setWorkspaceError(formatWorkspaceError(error, 'Failed to close settings window.'));
     }
-  }
-
-  async function handleCredentialAction(
-    action: () => Promise<CredentialStatus>,
-    fallbackMessage: string,
-    resetFields = false,
-  ): Promise<void> {
-    setCredentialsLoading(true);
-    setCredentialsError(null);
-
-    try {
-      const status = await action();
-      setCredentialStatus(status);
-      if (resetFields) {
-        setVaultPassword('');
-        setOpenaiKey('');
-        setAnthropicKey('');
-      }
-    } catch (error) {
-      setCredentialsError(formatWorkspaceError(error, fallbackMessage));
-    } finally {
-      setCredentialsLoading(false);
-    }
-  }
-
-  async function handleUnlockVault(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    await handleCredentialAction(
-      () => (credentialStatus.vaultExists ? unlockVault(vaultPassword) : createVault(vaultPassword)),
-      credentialStatus.vaultExists ? 'Failed to unlock vault.' : 'Failed to create vault.',
-      true,
-    );
-  }
-
-  async function handleSaveCredentials(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    await handleCredentialAction(
-      () => saveProviderKeys({ openai: openaiKey, anthropic: anthropicKey }),
-      'Failed to save provider keys.',
-      true,
-    );
-  }
-
-  async function handleClearProvider(provider: CredentialSummaryRow['provider']): Promise<void> {
-    await handleCredentialAction(
-      () => clearProviderKey(provider),
-      `Failed to clear ${provider} key.`,
-    );
-  }
-
-  async function handleLockVault(): Promise<void> {
-    await handleCredentialAction(() => lockVault(), 'Failed to lock vault.');
   }
 
   return (
@@ -212,30 +200,23 @@ export function SettingsWindow(): React.ReactElement {
       }}
     >
       <CredentialsSurface
-        title="LocalTeam Settings"
-        description="Manage provider credentials and the currently selected git workspace for this device."
+        title="LocalTeam Runtime Settings"
+        description="Nemoclaw/OpenClaw owns secret storage and model-provider access. LocalTeam manages workspace selection and team-to-runtime bindings."
         statusLabel={statusLabel}
         credentialRows={credentialRows}
-        vaultUnlocked={credentialStatus.unlocked}
-        vaultExists={credentialStatus.vaultExists}
-        loading={credentialsLoading}
-        error={credentialsError}
-        vaultPassword={vaultPassword}
-        openaiKey={openaiKey}
-        anthropicKey={anthropicKey}
-        canSave={canSave}
-        onVaultPasswordChange={setVaultPassword}
-        onOpenaiKeyChange={setOpenaiKey}
-        onAnthropicKeyChange={setAnthropicKey}
-        onUnlockVault={handleUnlockVault}
-        onSaveCredentials={handleSaveCredentials}
-        onClearProvider={handleClearProvider}
-        onLockVault={handleLockVault}
+        loading={workspaceBusy || runtimeBusy}
+        error={runtimeError}
+        runtimeStats={runtimeStats}
+        runtimeActionLabel={
+          snapshot?.gateway?.onboardingCompleted ? 'Re-run Onboarding' : 'Initialize Runtime'
+        }
+        runtimeActionDisabled={runtimeBusy}
+        onRuntimeAction={() => {
+          void handleLaunchRuntimeOnboarding();
+        }}
         onClose={() => {
           void handleOpenSettingsClose();
         }}
-        unlockButtonLabel={credentialStatus.vaultExists ? 'Unlock Vault' : 'Create Vault'}
-        saveButtonLabel={credentialsLoading ? 'Saving…' : 'Save Keys'}
       />
 
       <ProjectSettingsPanel
@@ -247,7 +228,7 @@ export function SettingsWindow(): React.ReactElement {
           void handleReloadWorkspace();
         }}
         loading={workspaceBusy}
-        busy={credentialsLoading}
+        busy={false}
         error={workspaceError}
         config={config}
       />

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -42,10 +42,7 @@ function tryDrainQueue(): void {
   }
 }
 
-function sendRequest(
-  method: string,
-  params: Record<string, unknown> = {},
-): Promise<any> {
+function sendRequest(method: string, params: Record<string, unknown> = {}): Promise<any> {
   return new Promise((resolve, reject) => {
     const id = String(Date.now() + Math.random());
     const msg = JSON.stringify({ id, method, params }) + '\n';
@@ -88,10 +85,66 @@ async function createGitWorkspace(prefix: string): Promise<string> {
   return root;
 }
 
-describe('Orchestrator E2E', () => {
+describe('Nemoclaw runtime E2E', () => {
   beforeAll(async () => {
-    workspaceRoot = await createGitWorkspace('localteam-orchestrator-e2e-');
-    appDataDir = await mkdtemp(join(tmpdir(), 'localteam-orchestrator-app-data-'));
+    workspaceRoot = await createGitWorkspace('localteam-nemoclaw-e2e-');
+    appDataDir = await mkdtemp(join(tmpdir(), 'localteam-nemoclaw-app-data-'));
+    await writeFile(
+      join(workspaceRoot, 'localteam.json'),
+      JSON.stringify(
+        {
+          version: 2,
+          defaultTeamId: 'team-a',
+          teams: [
+            {
+              id: 'team-a',
+              name: 'Team A',
+              workspaceMode: 'shared_project',
+              members: [
+                {
+                  id: 'architect',
+                  role: 'Software Architect',
+                  runtimeProfileRef: 'profiles/architect',
+                  runtimeHint: {
+                    provider: 'nemoclaw',
+                    model: 'openclaw-local',
+                  },
+                  systemPrompt: 'Lead the team.',
+                },
+              ],
+            },
+            {
+              id: 'team-b',
+              name: 'Team B',
+              workspaceMode: 'shared_project',
+              members: [
+                {
+                  id: 'security',
+                  role: 'Security Engineer',
+                  runtimeProfileRef: 'profiles/security',
+                  runtimeHint: {
+                    provider: 'nemoclaw',
+                    model: 'openclaw-hosted',
+                  },
+                  systemPrompt: 'Review the policy.',
+                },
+              ],
+            },
+          ],
+          sandbox: {
+            defaultMode: 'direct',
+            useWorktrees: false,
+          },
+          fileAccess: {
+            denyList: ['.env', '.ssh/', 'credentials*'],
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
     child = spawn(process.execPath, ['--import', 'tsx', 'src/index.ts'], {
       cwd: sidecarDir,
       env: {
@@ -118,36 +171,6 @@ describe('Orchestrator E2E', () => {
     });
 
     await sendRequest('v1.project.load', { rootPath: workspaceRoot });
-    await sendRequest('v1.project.save', {
-      config: {
-        team: {
-          name: 'Orchestrator E2E',
-          agents: [
-            {
-              id: 'architect',
-              role: 'Software Architect',
-              model: 'mock',
-              provider: 'mock',
-              systemPrompt: 'Lead the discussion.',
-              canExecuteCommands: true,
-              allowedPaths: ['.'],
-            },
-          ],
-        },
-        consensus: {
-          maxRounds: 2,
-          requiredMajority: 0.5,
-        },
-        sandbox: {
-          defaultMode: 'direct',
-          useWorktrees: false,
-        },
-        fileAccess: {
-          denyList: ['.env', '.ssh/', 'credentials*'],
-        },
-      },
-    });
-    await sendRequest('v1.session.start');
   });
 
   afterAll(async () => {
@@ -156,32 +179,26 @@ describe('Orchestrator E2E', () => {
     await rm(appDataDir, { recursive: true, force: true });
   });
 
-  it('sidecar responds to ping after orchestrator init', async () => {
-    const result = await sendRequest('ping');
-    expect(result).toEqual({ status: 'pong' });
-  });
+  it('applies teams and starts Nemoclaw-backed sessions', async () => {
+    const loaded = await sendRequest('v1.project.load', { rootPath: workspaceRoot });
+    expect((loaded as any).config.teams).toHaveLength(2);
 
-  it('creates and lists tasks via IPC', async () => {
-    const snapshot = await sendRequest('create_task', {
-      title: 'E2E Test Task',
-      description: 'Created from E2E test',
+    const applied = await sendRequest('v1.nemoclaw.team.apply', { teamId: 'team-b' });
+    expect((applied as any).session).toBeNull();
+
+    const started = await sendRequest('v1.nemoclaw.session.start', { teamId: 'team-b' });
+    expect((started as any).session?.teamId).toBe('team-b');
+
+    const status = await sendRequest('v1.nemoclaw.status');
+    expect((status as any).activeTeamId).toBe('team-b');
+    expect((status as any).runtimeProfiles).toHaveLength(0);
+
+    const sessions = await sendRequest('v1.nemoclaw.sessions.list');
+    expect((sessions as any[])).toHaveLength(1);
+
+    const stopped = await sendRequest('v1.nemoclaw.session.stop', {
+      sessionId: (started as any).session.id,
     });
-
-    expect(snapshot.tasks.some((task: any) => task.title === 'E2E Test Task')).toBe(
-      true,
-    );
-
-    const tasks = await sendRequest('list_tasks');
-    expect(tasks.length).toBeGreaterThanOrEqual(1);
-    expect(tasks.some((task: any) => task.title === 'E2E Test Task')).toBe(true);
-  });
-
-  it('returns agent list', async () => {
-    const agents = await sendRequest('get_agents');
-    expect(Array.isArray(agents)).toBe(true);
-  });
-
-  it('returns error for unknown method', async () => {
-    await expect(sendRequest('nonexistent')).rejects.toThrow('Unknown method');
+    expect((stopped as any).session?.status).toBe('idle');
   });
 });

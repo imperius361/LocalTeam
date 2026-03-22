@@ -4,18 +4,24 @@ import { useAppStore } from '../store/appStore';
 import { useTheme } from '../themes/ThemeContext';
 import type { NavLayer } from '../navigation/types';
 import { openSettingsWindow } from '../lib/ipc';
-import { countActiveRequestTasks } from '../lib/taskSelectors';
 
-function getBreadcrumbLabel(entry: NavLayer, teamName?: string): string {
+function getBreadcrumbLabel(
+  entry: NavLayer,
+  options: {
+    projectName?: string;
+    teamName?: string;
+    agentRole?: string;
+  },
+): string {
   switch (entry.layer) {
     case 'global':
       return 'Global';
     case 'project':
-      return teamName ?? entry.projectPath;
+      return options.projectName ?? entry.projectPath;
     case 'team':
-      return entry.teamId;
+      return options.teamName ?? entry.teamId;
     case 'agent':
-      return entry.agentId;
+      return options.agentRole ?? entry.agentId;
   }
 }
 
@@ -25,8 +31,14 @@ export function Topbar(): React.ReactElement {
   const { theme } = useTheme();
 
   const isPixel = theme === 'pixel';
+  const teams = snapshot?.config?.teams ?? [];
 
-  const projectName = snapshot?.config?.team?.name;
+  const defaultTeamId = snapshot?.config?.defaultTeamId;
+  const defaultTeam =
+    teams.find((team) => team.id === defaultTeamId) ??
+    teams.find((team) => team.id === snapshot?.activeTeamId) ??
+    teams[0];
+  const projectName = defaultTeam?.name;
 
   // Compute metrics
   const activeAgentCount =
@@ -34,8 +46,9 @@ export function Topbar(): React.ReactElement {
       (a) => a.status !== 'unavailable' && a.status !== 'idle'
     ).length ?? 0;
 
-  const tasksRunning =
-    snapshot ? countActiveRequestTasks(snapshot.tasks) : 0;
+  const sessionsRunning =
+    snapshot?.sessions?.filter((session) => session.status === 'running').length ??
+    (snapshot?.session?.status === 'running' ? 1 : 0);
 
   const sidecarReady = snapshot?.sidecar?.ready ?? false;
 
@@ -138,9 +151,22 @@ export function Topbar(): React.ReactElement {
       <nav style={breadcrumbContainerStyle}>
         {navStack.map((entry, index) => {
           const isLast = index === navStack.length - 1;
+          const teamId =
+            entry.layer === 'team' || entry.layer === 'agent' ? entry.teamId : undefined;
+          const team = teamId
+            ? teams.find((candidate) => candidate.id === teamId)
+            : defaultTeam;
+          const agentRole =
+            entry.layer === 'agent'
+              ? team?.members.find((member) => member.id === entry.agentId)?.role
+              : undefined;
           const label = getBreadcrumbLabel(
             entry,
-            entry.layer === 'project' ? projectName : undefined
+            {
+              projectName,
+              teamName: team?.name,
+              agentRole,
+            },
           );
 
           return (
@@ -193,8 +219,8 @@ export function Topbar(): React.ReactElement {
             <span style={metricValueStyle}>{activeAgentCount}</span>
           </span>
           <span>
-            Tasks{' '}
-            <span style={metricValueStyle}>{tasksRunning}</span>
+            Sessions{' '}
+            <span style={metricValueStyle}>{sessionsRunning}</span>
           </span>
           <div style={sidecarDotStyle} title={sidecarReady ? 'Sidecar online' : 'Sidecar offline'} />
         </div>

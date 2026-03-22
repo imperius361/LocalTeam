@@ -1,4 +1,15 @@
 export type {
-  ProjectSnapshot, AgentStatus, Task, AgentMessage,
-  ConsensusState, MessageStreamDelta, RecentProject
+  ProjectSnapshot,
+  AgentStatus,
+  Task,
+  AgentMessage,
+  ConsensusState,
+  MessageStreamDelta,
+  RecentProject,
+  TeamConfig,
+  CommandApproval,
+  RuntimeProfileSummary,
+  NemoclawGatewayStatus,
+  NemoclawSessionSummary,
+  NemoclawApprovalSummary,
 } from '../lib/contracts';

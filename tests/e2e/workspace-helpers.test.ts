@@ -8,14 +8,16 @@ function makeSnapshot(overrides: Partial<ProjectSnapshot> = {}): ProjectSnapshot
     version: 'v1',
     projectRoot: 'C:\\Repositories\\LocalTeam',
     config: {
-      team: {
-        name: 'LocalTeam',
-        agents: [],
-      },
-      consensus: {
-        maxRounds: 3,
-        requiredMajority: 0.66,
-      },
+      version: 2,
+      defaultTeamId: 'localteam',
+      teams: [
+        {
+          id: 'localteam',
+          name: 'LocalTeam',
+          workspaceMode: 'shared_project',
+          members: [],
+        },
+      ],
       sandbox: {
         defaultMode: 'worktree',
         useWorktrees: true,
@@ -32,6 +34,16 @@ function makeSnapshot(overrides: Partial<ProjectSnapshot> = {}): ProjectSnapshot
     credentials: [],
     templates: [],
     commandApprovals: [],
+    gateway: {
+      ready: true,
+      onboardingCompleted: true,
+      profileCount: 0,
+      workspaceRoot: 'C:\\Repositories\\LocalTeam',
+    },
+    runtimeProfiles: [],
+    sessions: [],
+    approvals: [],
+    activeTeamId: 'localteam',
     sidecar: {
       ready: true,
       version: '0.2.0',
@@ -112,6 +124,16 @@ describe('workspace helpers', () => {
       credentials: [],
       templates: [],
       commandApprovals: [],
+      gateway: {
+        ready: false,
+        onboardingCompleted: false,
+        profileCount: 0,
+        workspaceRoot: null,
+      },
+      runtimeProfiles: [],
+      sessions: [],
+      approvals: [],
+      activeTeamId: null,
       sidecar: {
         ready: false,
         version: 'offline',

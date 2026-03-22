@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
+
 import { useNav } from '../../navigation/NavContext';
 import { useAppStore } from '../../store/appStore';
 import { loadProjectSnapshot, pickProjectFolder } from '../../lib/ipc';
 import { formatWorkspaceError, loadAndStoreWorkspace } from '../../lib/workspace';
-import { countActiveRequestTasks } from '../../lib/taskSelectors';
 import { ProgressBar } from '../common/ProgressBar';
 import type { RecentProject } from '../../lib/contracts';
 
@@ -23,20 +23,24 @@ export function GlobalView(): React.ReactElement {
     loadRecents();
   }, [loadRecents]);
 
-  const agentStatuses = snapshot?.agentStatuses ?? [];
-  const tasks = snapshot?.tasks ?? [];
-
-  const activeAgents = agentStatuses.filter(
-    (a) => a.status !== 'idle' && a.status !== 'unavailable',
-  ).length;
-  const totalAgents = agentStatuses.length;
-  const runningTasks = countActiveRequestTasks(tasks);
-  const sidecarReady = snapshot?.sidecar?.ready ?? false;
-
-  const alertAgents = agentStatuses.filter(
-    (a) => a.status === 'unavailable' || !!a.lastError,
+  const teams = snapshot?.config?.teams ?? [];
+  const members = teams.flatMap((team) => team.members);
+  const session = snapshot?.session ?? null;
+  const pendingApprovals = (snapshot?.commandApprovals ?? []).filter(
+    (approval) => approval.status === 'pending',
   );
-  const hasAlerts = alertAgents.length > 0;
+  const activeStatuses = snapshot?.agentStatuses ?? [];
+  const connectedMembers = activeStatuses.filter((status) => status.status !== 'unavailable').length;
+  const activeMembers = activeStatuses.filter(
+    (status) => status.status === 'thinking' || status.status === 'writing',
+  ).length;
+  const sidecarReady = snapshot?.sidecar?.ready ?? false;
+  const hasSession = Boolean(session && session.status !== 'idle');
+  const alertMembers = activeStatuses.filter(
+    (status) => status.status === 'unavailable' || Boolean(status.lastError),
+  );
+  const hasAlerts =
+    alertMembers.length > 0 || pendingApprovals.length > 0 || Boolean(snapshot?.sidecar.lastError);
 
   async function loadAndActivateProject(rootPath: string): Promise<void> {
     setLoadingProjectPath(rootPath);
@@ -60,7 +64,7 @@ export function GlobalView(): React.ReactElement {
     }
   }
 
-  async function openWorkspaceDialog() {
+  async function openWorkspaceDialog(): Promise<void> {
     try {
       const selected = await pickProjectFolder(snapshot?.projectRoot ?? recentProjects[0]?.path);
       if (selected) {
@@ -71,7 +75,7 @@ export function GlobalView(): React.ReactElement {
     }
   }
 
-  async function openLegacyProjectDialog() {
+  async function openLegacyProjectDialog(): Promise<void> {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog');
       const selected = await open({
@@ -84,6 +88,61 @@ export function GlobalView(): React.ReactElement {
     } catch (error) {
       setLoadError(formatWorkspaceError(error, 'Failed to open legacy config.'));
     }
+  }
+
+  function getCardDotColor(project: RecentProject): string {
+    if (!snapshot || snapshot.projectRoot !== project.path) {
+      return '#6b7280';
+    }
+    if (!snapshot.sidecar.ready) {
+      return 'var(--red)';
+    }
+    if (pendingApprovals.length > 0) {
+      return 'var(--yellow)';
+    }
+    if (alertMembers.length > 0) {
+      return 'var(--red)';
+    }
+    if (hasSession) {
+      return 'var(--green)';
+    }
+    return '#6b7280';
+  }
+
+  function getCardMemberPips(project: RecentProject): { color: string; id: string }[] {
+    if (!snapshot || snapshot.projectRoot !== project.path) {
+      return [];
+    }
+
+    return snapshot.agentStatuses.map((status) => {
+      let color = '#6b7280';
+      if (status.status === 'unavailable') {
+        color = 'var(--red)';
+      } else if (status.status === 'thinking' || status.status === 'writing') {
+        color = 'var(--yellow)';
+      } else {
+        color = 'var(--green)';
+      }
+      return { color, id: status.agentId };
+    });
+  }
+
+  function getCardStats(project: RecentProject): {
+    teams: number;
+    members: number;
+    approvals: number;
+    sessions: number;
+  } {
+    if (!snapshot || snapshot.projectRoot !== project.path) {
+      return { teams: 0, members: 0, approvals: 0, sessions: 0 };
+    }
+
+    return {
+      teams: snapshot.config?.teams.length ?? 0,
+      members: snapshot.config?.teams.flatMap((team) => team.members).length ?? 0,
+      approvals: pendingApprovals.length,
+      sessions: hasSession ? 1 : 0,
+    };
   }
 
   const pageStyle: React.CSSProperties = {
@@ -142,90 +201,51 @@ export function GlobalView(): React.ReactElement {
     gap: '10px',
   };
 
-  const openActionStyle: React.CSSProperties = {
-    fontSize: '10px',
-    color: 'var(--text-muted)',
-    background: 'transparent',
-    border: '1px solid var(--border)',
-    padding: '4px 8px',
-    cursor: loadingProjectPath ? 'not-allowed' : 'pointer',
-  };
-
-  function getCardDotColor(project: RecentProject): string {
-    if (!snapshot || snapshot.projectRoot !== project.path) return '#6b7280';
-    const statuses = snapshot.agentStatuses;
-    if (statuses.some((a) => a.status === 'unavailable')) return 'var(--red)';
-    if (statuses.some((a) => a.status !== 'idle' && a.status !== 'unavailable')) return 'var(--yellow)';
-    if (statuses.length > 0) return 'var(--green)';
-    return '#6b7280';
-  }
-
-  function getCardAgentPips(project: RecentProject): { color: string; id: string }[] {
-    if (!snapshot || snapshot.projectRoot !== project.path) return [];
-    return snapshot.agentStatuses.map((a) => {
-      let color = '#6b7280';
-      if (a.status === 'unavailable') color = 'var(--red)';
-      else if (a.status !== 'idle') color = 'var(--yellow)';
-      else color = 'var(--green)';
-      return { color, id: a.agentId };
-    });
-  }
-
-  function getCardStats(project: RecentProject): { teams: number; agents: number; running: number } {
-    if (!snapshot || snapshot.projectRoot !== project.path) {
-      return { teams: 0, agents: 0, running: 0 };
-    }
-    const teams = snapshot.config?.team ? 1 : 0;
-    const agents = snapshot.agentStatuses.length;
-    const running = countActiveRequestTasks(snapshot.tasks);
-    return { teams, agents, running };
-  }
-
   return (
     <div style={pageStyle}>
-      {/* Section 1: System Metrics */}
       <div style={statRowStyle}>
-        {/* Active Agents */}
         <div style={statBoxStyle}>
-          <div style={labelStyle}>Active Agents</div>
-          <div style={{ fontSize: '22px', fontWeight: 'bold', color: 'var(--green)' }}>
-            {activeAgents}
+          <div style={labelStyle}>Configured Teams</div>
+          <div style={{ fontSize: '22px', fontWeight: 'bold', color: 'var(--accent)' }}>
+            {teams.length}
           </div>
-          <div style={subTextStyle}>{totalAgents} total</div>
+          <div style={subTextStyle}>
+            {configLabel(teams.length, 'team')}
+          </div>
+        </div>
+
+        <div style={statBoxStyle}>
+          <div style={labelStyle}>Connected Members</div>
+          <div style={{ fontSize: '22px', fontWeight: 'bold', color: 'var(--green)' }}>
+            {connectedMembers}
+          </div>
+          <div style={subTextStyle}>{members.length} configured</div>
           <div style={{ marginTop: '6px' }}>
             <ProgressBar
-              value={totalAgents > 0 ? (activeAgents / totalAgents) * 100 : 0}
+              value={members.length > 0 ? (connectedMembers / members.length) * 100 : 0}
               color="var(--green)"
             />
           </div>
         </div>
 
-        {/* Running Tasks */}
         <div style={statBoxStyle}>
-          <div style={labelStyle}>Running Tasks</div>
+          <div style={labelStyle}>Active Members</div>
           <div style={{ fontSize: '22px', fontWeight: 'bold', color: 'var(--yellow)' }}>
-            {runningTasks}
+            {activeMembers}
           </div>
-          <div style={subTextStyle}>in progress</div>
+          <div style={subTextStyle}>currently producing output</div>
         </div>
 
-        {/* CPU */}
         <div style={statBoxStyle}>
-          <div style={labelStyle}>CPU</div>
-          <div style={{ fontSize: '22px', fontWeight: 'bold' }}>--</div>
-          <div style={subTextStyle}>live metrics coming soon</div>
+          <div style={labelStyle}>Pending Approvals</div>
+          <div style={{ fontSize: '22px', fontWeight: 'bold', color: 'var(--yellow)' }}>
+            {pendingApprovals.length}
+          </div>
+          <div style={subTextStyle}>awaiting user review</div>
         </div>
 
-        {/* Memory */}
         <div style={statBoxStyle}>
-          <div style={labelStyle}>Memory</div>
-          <div style={{ fontSize: '22px', fontWeight: 'bold' }}>--</div>
-          <div style={subTextStyle}>live metrics coming soon</div>
-        </div>
-
-        {/* Sidecar */}
-        <div style={statBoxStyle}>
-          <div style={labelStyle}>Sidecar</div>
+          <div style={labelStyle}>Gateway Bridge</div>
           <div
             style={{
               fontSize: '22px',
@@ -235,17 +255,24 @@ export function GlobalView(): React.ReactElement {
           >
             {sidecarReady ? 'Online' : 'Offline'}
           </div>
-          <div style={subTextStyle}>{sidecarReady ? 'connected' : 'not connected'}</div>
+          <div style={subTextStyle}>
+            {hasSession ? `Session ${session?.status ?? 'idle'}` : 'No active session'}
+          </div>
         </div>
       </div>
 
-      {/* Section 2: Alert strip */}
       {hasAlerts && (
         <div
           style={{
-            background: 'rgba(239,68,68,0.08)',
-            border: '1px solid rgba(239,68,68,0.25)',
-            borderLeft: '3px solid var(--red)',
+            background: pendingApprovals.length > 0 ? 'rgba(250,204,21,0.08)' : 'rgba(239,68,68,0.08)',
+            border:
+              pendingApprovals.length > 0
+                ? '1px solid rgba(250,204,21,0.25)'
+                : '1px solid rgba(239,68,68,0.25)',
+            borderLeft:
+              pendingApprovals.length > 0
+                ? '3px solid var(--yellow)'
+                : '3px solid var(--red)',
             padding: '8px 14px',
             display: 'flex',
             flexDirection: 'column',
@@ -253,58 +280,88 @@ export function GlobalView(): React.ReactElement {
             marginBottom: '16px',
           }}
         >
-          {alertAgents.map((a) => (
+          {pendingApprovals.length > 0 && (
+            <div style={{ fontSize: '11px' }}>
+              {pendingApprovals.length} command approval
+              {pendingApprovals.length === 1 ? '' : 's'} need review before Nemoclaw can continue.
+            </div>
+          )}
+          {alertMembers.map((agent) => (
             <div
-              key={a.agentId}
+              key={agent.agentId}
               style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '11px' }}
             >
-              <span>⚠ {a.role} is blocked</span>
-              <button
-                onClick={() => {}}
-                style={{
-                  fontSize: '10px',
-                  padding: '2px 8px',
-                  background: 'transparent',
-                  border: '1px solid rgba(239,68,68,0.4)',
-                  color: 'var(--red)',
-                  cursor: 'pointer',
-                }}
-              >
-                Resolve
-              </button>
+              <span>{agent.role} is unavailable</span>
+              {agent.lastError && <span style={{ color: 'var(--text-muted)' }}>{agent.lastError}</span>}
             </div>
           ))}
+          {snapshot?.sidecar.lastError && (
+            <div style={{ fontSize: '11px' }}>{snapshot.sidecar.lastError}</div>
+          )}
         </div>
       )}
 
-      {/* Section 3: Section header */}
-      <div style={sectionHeaderStyle}>Projects</div>
-      <hr style={hrStyle} />
+      {loadError && (
+        <div style={{ marginBottom: '12px', color: 'var(--red)', fontSize: '11px' }}>
+          {loadError}
+        </div>
+      )}
 
-      {/* Section 4: Project grid */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '12px',
+        }}
+      >
+        <div>
+          <div style={sectionHeaderStyle}>Projects</div>
+          <hr style={hrStyle} />
+        </div>
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+          <button
+            type="button"
+            onClick={() => {
+              void openWorkspaceDialog();
+            }}
+            style={actionButtonStyle(false)}
+          >
+            Open Workspace
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void openLegacyProjectDialog();
+            }}
+            style={actionButtonStyle(true)}
+          >
+            Open Legacy Config
+          </button>
+        </div>
+      </div>
+
       <div style={gridStyle}>
         {recentProjects.map((project) => {
           const dotColor = getCardDotColor(project);
-          const pips = getCardAgentPips(project);
-          const visiblePips = pips.slice(0, 5);
+          const pips = getCardMemberPips(project);
+          const visiblePips = pips.slice(0, 6);
           const extraPips = pips.length - visiblePips.length;
           const stats = getCardStats(project);
           const isHovered = hoveredPath === project.path;
 
-          const cardStyle: React.CSSProperties = {
-            background: 'var(--bg-panel)',
-            border: `var(--border-width) solid ${isHovered ? 'var(--accent)' : 'var(--border)'}`,
-            padding: '16px',
-            cursor: 'pointer',
-            position: 'relative',
-            boxSizing: 'border-box',
-            transition: 'border-color 0.15s ease',
-          };
-
           return (
             <div
               key={project.path}
-              style={cardStyle}
+              style={{
+                background: 'var(--bg-panel)',
+                border: `var(--border-width) solid ${isHovered ? 'var(--accent)' : 'var(--border)'}`,
+                padding: '16px',
+                cursor: 'pointer',
+                position: 'relative',
+                boxSizing: 'border-box',
+                transition: 'border-color 0.15s ease',
+              }}
               onMouseEnter={() => setHoveredPath(project.path)}
               onMouseLeave={() => setHoveredPath(null)}
               onClick={() => {
@@ -313,8 +370,7 @@ export function GlobalView(): React.ReactElement {
                 }
               }}
             >
-              {/* Status dot + name */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
                 <div
                   style={{
                     width: '8px',
@@ -324,140 +380,69 @@ export function GlobalView(): React.ReactElement {
                     flexShrink: 0,
                   }}
                 />
-                <span style={{ fontSize: '13px', fontWeight: 600 }}>{project.name}</span>
+                <strong style={{ fontSize: '13px', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {project.name}
+                </strong>
               </div>
-
-              {/* Project path */}
-              <div
-                style={{
-                  fontSize: '10px',
-                  fontFamily: 'monospace',
-                  color: 'var(--text-muted)',
-                  marginBottom: '10px',
-                  wordBreak: 'break-all',
-                }}
-              >
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '10px' }}>
                 {project.path}
               </div>
-
-              {/* Stats row */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(3, 1fr)',
-                  gap: '4px',
-                  marginBottom: '10px',
-                }}
-              >
-                {[
-                  { label: 'Teams', value: stats.teams },
-                  { label: 'Agents', value: stats.agents },
-                  { label: 'Running', value: stats.running },
-                ].map((cell) => (
-                  <div key={cell.label} style={{ textAlign: 'center' }}>
-                    <div style={{ fontSize: '12px', fontWeight: 600 }}>{cell.value}</div>
-                    <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{cell.label}</div>
-                  </div>
-                ))}
+              <div style={{ display: 'flex', gap: '12px', fontSize: '11px', marginBottom: '10px' }}>
+                <span>{stats.teams} teams</span>
+                <span>{stats.members} members</span>
+                <span>{stats.sessions} sessions</span>
+                <span>{stats.approvals} approvals</span>
               </div>
-
-              {/* Agent pip row */}
-              {visiblePips.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  {visiblePips.map((pip) => (
-                    <div
-                      key={pip.id}
-                      style={{
-                        width: '6px',
-                        height: '6px',
-                        borderRadius: '50%',
-                        background: pip.color,
-                      }}
-                    />
-                  ))}
-                  {extraPips > 0 && (
-                    <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
-                      +{extraPips} more
-                    </span>
-                  )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '5px', minHeight: '12px' }}>
+                {visiblePips.map((pip) => (
+                  <div
+                    key={pip.id}
+                    style={{
+                      width: '7px',
+                      height: '7px',
+                      borderRadius: '50%',
+                      background: pip.color,
+                    }}
+                  />
+                ))}
+                {extraPips > 0 && (
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                    +{extraPips}
+                  </span>
+                )}
+              </div>
+              {loadingProjectPath === project.path && (
+                <div style={{ position: 'absolute', top: 12, right: 12, fontSize: '10px' }}>
+                  Loading…
                 </div>
               )}
-
-              {/* Hover hint */}
-              <div
-                style={{
-                  position: 'absolute',
-                  bottom: '10px',
-                  right: '12px',
-                  fontSize: '9px',
-                  color: 'var(--accent)',
-                  opacity: isHovered ? 1 : 0,
-                  transition: 'opacity 0.15s ease',
-                  pointerEvents: 'none',
-                }}
-              >
-                Open →
-              </div>
             </div>
           );
         })}
-
-        {/* Add project card */}
-        <div
-          style={{
-            background: 'var(--bg-panel)',
-            border: `var(--border-width) dashed var(--border)`,
-            padding: '16px',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '6px',
-            minHeight: '100px',
-            boxSizing: 'border-box',
-          }}
-        >
-          <div style={{ fontSize: '20px', color: 'var(--text-muted)' }}>+</div>
-          <div style={{ fontSize: '12px', fontWeight: 600 }}>Open Workspace</div>
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center' }}>
-            Choose the git repository folder LocalTeam should operate against
-          </div>
-          <div style={{ display: 'flex', gap: '8px', marginTop: '4px' }}>
-            <button
-              type="button"
-              style={openActionStyle}
-              onClick={() => {
-                void openWorkspaceDialog();
-              }}
-              disabled={Boolean(loadingProjectPath)}
-            >
-              {loadingProjectPath ? 'Opening…' : 'Choose Folder'}
-            </button>
-            <button
-              type="button"
-              style={openActionStyle}
-              onClick={() => {
-                void openLegacyProjectDialog();
-              }}
-              disabled={Boolean(loadingProjectPath)}
-            >
-              Use localteam.json
-            </button>
-          </div>
-        </div>
       </div>
 
-      {loadError && (
-        <div
-          style={{
-            marginTop: '12px',
-            fontSize: '11px',
-            color: 'var(--red)',
-          }}
-        >
-          {loadError}
+      {recentProjects.length === 0 && (
+        <div style={{ marginTop: '18px', fontSize: '11px', color: 'var(--text-muted)' }}>
+          No recent projects yet. Open a git workspace to create or load a team-managed project.
         </div>
       )}
     </div>
   );
+}
+
+function configLabel(count: number, singular: string): string {
+  return `${count} ${singular}${count === 1 ? '' : 's'} configured`;
+}
+
+function actionButtonStyle(primary: boolean): React.CSSProperties {
+  return {
+    fontSize: '10px',
+    color: primary ? 'var(--text-muted)' : 'var(--accent)',
+    background: primary ? 'transparent' : 'var(--accent-dim)',
+    border: primary ? '1px solid var(--border)' : '1px solid var(--accent)',
+    padding: '6px 10px',
+    cursor: 'pointer',
+    textTransform: 'uppercase',
+    letterSpacing: '1px',
+  };
 }

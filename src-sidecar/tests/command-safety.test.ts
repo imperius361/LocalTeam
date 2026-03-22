@@ -11,10 +11,16 @@ const projectRoot = '/repo';
 
 function makeConfig(overrides: Partial<ProjectConfig> = {}): ProjectConfig {
   return {
-    team: {
-      name: 'Test',
-      agents: [],
-    },
+    version: 2,
+    defaultTeamId: 'test-team',
+    teams: [
+      {
+        id: 'test-team',
+        name: 'Test',
+        workspaceMode: 'shared_project',
+        members: [],
+      },
+    ],
     consensus: {
       maxRounds: 3,
       requiredMajority: 0.66,
@@ -40,6 +46,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     createdAt: 1,
     updatedAt: 1,
     tokenEstimate: 0,
+    origin: 'user_request',
     ...overrides,
   };
 }
@@ -48,8 +55,11 @@ function makeAgent(overrides: Partial<AgentConfig> = {}): AgentConfig {
   return {
     id: 'agent-1',
     role: 'Engineer',
-    model: 'mock',
-    provider: 'mock',
+    runtimeProfileRef: 'profiles/engineer',
+    runtimeHint: {
+      provider: 'nemoclaw',
+      model: 'openclaw-local',
+    },
     systemPrompt: 'Do work.',
     canExecuteCommands: true,
     ...overrides,

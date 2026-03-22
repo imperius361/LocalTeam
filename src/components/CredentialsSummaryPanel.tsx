@@ -1,75 +1,53 @@
 export type CredentialSummaryRow = {
-  provider: 'openai' | 'anthropic';
-  hasStoredKey: boolean;
-  hasRuntimeKey: boolean;
-  required: boolean;
+  id: string;
+  label: string;
+  assignedMembers: number;
+  state: 'connected' | 'configured' | 'unbound';
+  detail: string;
 };
 
 interface CredentialsSummaryPanelProps {
   credentialRows: CredentialSummaryRow[];
   statusLabel: string;
-  vaultUnlocked: boolean;
   onOpenSettings: () => void;
-  onLockVault: () => void;
 }
 
 export function CredentialsSummaryPanel({
   credentialRows,
   statusLabel,
-  vaultUnlocked,
   onOpenSettings,
-  onLockVault,
 }: CredentialsSummaryPanelProps) {
-  const hasStoredKeys = credentialRows.some((credential) => credential.hasStoredKey);
-  const hasRequiredMissing = credentialRows.some(
-    (credential) => credential.required && !credential.hasStoredKey,
-  );
-  const hasRequiredUnsynced = credentialRows.some(
-    (credential) => credential.required && credential.hasStoredKey && !credential.hasRuntimeKey,
-  );
+  const connectedCount = credentialRows.filter((row) => row.state === 'connected').length;
+  const configuredCount = credentialRows.filter((row) => row.state === 'configured').length;
+  const unboundCount = credentialRows.filter((row) => row.state === 'unbound').length;
 
   return (
     <div className="panel credential-summary-panel">
       <div className="panel-header">
-        <h2>Agent API Keys</h2>
+        <h2>Model Access</h2>
         <span>{statusLabel}</span>
       </div>
       <p className="recovery-copy">
-        Manage provider keys in Settings. The dashboard only shows live readiness and vault state.
+        Nemoclaw manages provider secrets and hosted-model access. LocalTeam only tracks which
+        runtime profile refs each team member expects to use.
       </p>
       <div className="credential-summary-list">
         {credentialRows.map((credential) => (
           <div
-            key={credential.provider}
-            className={`credential-summary-row ${credential.required ? 'required' : 'optional'} ${
-              credential.hasRuntimeKey
+            key={credential.id}
+            className={`credential-summary-row ${
+              credential.state === 'connected'
                 ? 'ready'
-                : credential.hasStoredKey
+                : credential.state === 'configured'
                   ? 'saved-only'
                   : 'inactive'
             }`}
           >
             <div className="credential-summary-copy">
-              <span>{formatProviderLabel(credential.provider)}</span>
-              <small>
-                {credential.hasRuntimeKey
-                  ? credential.required
-                    ? 'Ready in the live runtime'
-                    : 'Available in the live runtime'
-                  : credential.hasStoredKey
-                    ? 'Stored in the vault. Open Settings to sync it.'
-                    : credential.required
-                      ? 'Required by the active team'
-                      : 'Optional for the active team'}
-              </small>
+              <span>{credential.label}</span>
+              <small>{credential.detail}</small>
             </div>
-            <strong>
-              {formatCredentialStateLabel(
-                credential.hasRuntimeKey,
-                credential.required,
-                credential.hasStoredKey,
-              )}
-            </strong>
+            <strong>{formatCredentialStateLabel(credential.state)}</strong>
           </div>
         ))}
       </div>
@@ -77,53 +55,42 @@ export function CredentialsSummaryPanel({
         <button className="secondary-button" type="button" onClick={onOpenSettings}>
           Open Settings
         </button>
-        {vaultUnlocked && (
-          <button className="secondary-button" type="button" onClick={onLockVault}>
-            Lock Vault
-          </button>
-        )}
       </div>
-      {hasRequiredUnsynced && (
+      {unboundCount > 0 && (
         <p className="recovery-copy">
-          Some required keys are saved but not synced to the live runtime. Open Settings and unlock
-          the vault to load them.
+          {unboundCount} binding{unboundCount === 1 ? '' : 's'} still need a Nemoclaw runtime
+          profile ref before that member can use a hosted or local model.
         </p>
       )}
-      {hasRequiredMissing && !hasRequiredUnsynced && (
+      {unboundCount === 0 && configuredCount > 0 && (
         <p className="recovery-copy">
-          Some required provider keys are still missing. Open Settings to add them before starting
-          a live discussion.
+          {configuredCount} profile ref{configuredCount === 1 ? '' : 's'} are configured in the
+          project but not yet reflected in the live runtime bridge.
         </p>
       )}
-      {!hasStoredKeys && (
+      {connectedCount > 0 && (
         <p className="recovery-copy">
-          No API keys are stored yet. Open Settings to create the vault and save provider keys on
-          this device.
+          {connectedCount} binding{connectedCount === 1 ? '' : 's'} are visible in the active
+          runtime session.
+        </p>
+      )}
+      {credentialRows.length === 0 && (
+        <p className="recovery-copy">
+          No runtime profile refs are configured yet. Add members to a team and bind them to
+          Nemoclaw profiles in project settings.
         </p>
       )}
     </div>
   );
 }
 
-function formatProviderLabel(provider: CredentialSummaryRow['provider']): string {
-  switch (provider) {
-    case 'openai':
-      return 'OpenAI';
-    case 'anthropic':
-      return 'Anthropic';
+function formatCredentialStateLabel(state: CredentialSummaryRow['state']): string {
+  switch (state) {
+    case 'connected':
+      return 'Connected';
+    case 'configured':
+      return 'Configured';
+    case 'unbound':
+      return 'Needs binding';
   }
-}
-
-function formatCredentialStateLabel(
-  hasRuntimeKey: boolean,
-  required: boolean,
-  hasStoredKey = false,
-): string {
-  if (hasRuntimeKey) {
-    return required ? 'Ready' : 'Saved';
-  }
-  if (hasStoredKey) {
-    return 'Stored';
-  }
-  return required ? 'Missing' : 'Optional';
 }

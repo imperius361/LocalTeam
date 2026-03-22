@@ -31,60 +31,41 @@ describe('Request Handlers', () => {
 describe('Runtime Handlers', () => {
   function setup() {
     const runtime = {
-      status: async () => ({ agentStatuses: [], tasks: [] }),
+      status: async () => ({ agentStatuses: [], tasks: [], sidecar: { ready: true } }),
       loadProject: async () => ({ projectRoot: '/tmp/project' }),
       saveProject: async () => ({ ok: true }),
       listTemplates: async () => [{ id: 'default' }],
-      getTemplate: async () => ({ team: { name: 'Default', agents: [] } }),
-      syncCredentials: async () => [{ provider: 'openai', hasKey: true }],
+      getTemplate: async () => ({ teams: [{ id: 'default', name: 'Default', members: [] }] }),
+      getNemoclawStatus: async () => ({ gateway: { ready: true }, runtimeProfiles: [] }),
+      listRuntimeProfiles: async () => [{ id: 'nemoclaw/local-default' }],
+      applyTeam: async () => ({ ok: true }),
       startSession: async () => ({ session: { id: 'session-1' } }),
-      createTask: async (title: string) => ({
-        tasks: [{ id: 'task-1', title, status: 'pending' }],
-      }),
-      listTasks: async () => [{ id: 'task-1' }],
-      listMessages: async () => [{ id: 'msg-1' }],
-      requestCommandExecution: async (request: any) => ({
-        id: 'approval-1',
-        taskId: request.taskId,
-        agentId: request.agentId,
-        command: request.command,
-        status: 'pending',
-      }),
-      interjectTask: async (taskId: string, guidance: string) => ({
-        taskId,
-        guidance,
-      }),
-      respondToTaskReview: async (taskId: string, action: string, guidance?: string) => ({
-        taskId,
-        action,
-        guidance,
-      }),
-      resolveCommandApproval: async (approvalId: string, action: string) => ({
-        id: approvalId,
-        status: action === 'approve' ? 'completed' : 'denied',
-      }),
+      stopSession: async () => ({ session: { id: 'session-1', status: 'idle' } }),
+      listSessions: async () => [{ id: 'session-1' }],
+      observeSession: async () => [{ id: 'event-1' }],
+      listApprovals: async () => [{ id: 'approval-1', status: 'pending' }],
       listCommandApprovals: async () => [{ id: 'approval-1', status: 'pending' }],
-      resolveConsensus: async () => ({ consensus: [] }),
+      resolveApproval: async () => ({ id: 'approval-1', status: 'approved' }),
     } as unknown as LocalTeamRuntime;
 
     return createHandlers(runtime);
   }
 
-  it('handles v1.task.create', async () => {
+  it('handles v1.nemoclaw.status', async () => {
     const handle = setup();
     const res = await handle({
       id: '1',
-      method: 'v1.task.create',
-      params: { title: 'Build auth', description: 'OAuth2 login' },
+      method: 'v1.nemoclaw.status',
+      params: {},
     });
 
     expect(res.error).toBeUndefined();
-    expect((res.result as any).tasks[0].title).toBe('Build auth');
+    expect((res.result as any).gateway.ready).toBe(true);
   });
 
-  it('handles v1.task.list', async () => {
+  it('handles v1.nemoclaw.profiles.list', async () => {
     const handle = setup();
-    const res = await handle({ id: '1', method: 'v1.task.list', params: {} });
+    const res = await handle({ id: '1', method: 'v1.nemoclaw.profiles.list', params: {} });
 
     expect(res.error).toBeUndefined();
     expect((res.result as any[])).toHaveLength(1);
@@ -98,44 +79,76 @@ describe('Runtime Handlers', () => {
     expect(res.result).toEqual([]);
   });
 
-  it('handles v1.command.execute', async () => {
+  it('handles v1.nemoclaw.team.apply', async () => {
     const handle = setup();
     const res = await handle({
       id: '1',
-      method: 'v1.command.execute',
-      params: {
-        taskId: 'task-1',
-        agentId: 'architect',
-        command: 'git status',
-      },
+      method: 'v1.nemoclaw.team.apply',
+      params: { teamId: 'default-team' },
     });
 
     expect(res.error).toBeUndefined();
-    expect((res.result as any).status).toBe('pending');
+    expect((res.result as any).ok).toBe(true);
   });
 
-  it('validates required params for v1.command.execute', async () => {
+  it('handles v1.session.start', async () => {
     const handle = setup();
     const res = await handle({
       id: '1',
-      method: 'v1.command.execute',
-      params: { taskId: 'task-1', command: 'git status' },
-    });
-
-    expect(res.error).toBeDefined();
-    expect(res.error!.message).toContain('agentId');
-  });
-
-  it('handles v1.command.approval.resolve', async () => {
-    const handle = setup();
-    const res = await handle({
-      id: '1',
-      method: 'v1.command.approval.resolve',
-      params: { approvalId: 'approval-1', action: 'approve' },
+      method: 'v1.session.start',
+      params: {},
     });
 
     expect(res.error).toBeUndefined();
-    expect((res.result as any).status).toBe('completed');
+    expect((res.result as any).session.id).toBe('session-1');
+  });
+
+  it('handles v1.nemoclaw.session.stop', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.nemoclaw.session.stop',
+      params: { sessionId: 'session-1' },
+    });
+
+    expect(res.error).toBeUndefined();
+    expect((res.result as any).session.status).toBe('idle');
+  });
+
+  it('handles v1.nemoclaw.sessions.list', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.nemoclaw.sessions.list',
+      params: {},
+    });
+
+    expect(res.error).toBeUndefined();
+    expect((res.result as any[])).toHaveLength(1);
+  });
+
+  it('handles v1.nemoclaw.events.list', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.nemoclaw.events.list',
+      params: { sessionId: 'session-1' },
+    });
+
+    expect(res.error).toBeUndefined();
+    expect((res.result as any[])).toHaveLength(1);
+  });
+
+  it('handles v1.nemoclaw.approvals.list', async () => {
+    const handle = setup();
+    const res = await handle({
+      id: '1',
+      method: 'v1.nemoclaw.approvals.list',
+      params: {},
+    });
+
+    expect(res.error).toBeUndefined();
+    expect((res.result as any[])).toHaveLength(1);
   });
 
   it('handles v1.command.approval.list', async () => {
@@ -150,41 +163,15 @@ describe('Runtime Handlers', () => {
     expect((res.result as any[])).toHaveLength(1);
   });
 
-  it('handles v1.task.interject', async () => {
+  it('handles v1.command.approval.resolve', async () => {
     const handle = setup();
     const res = await handle({
       id: '1',
-      method: 'v1.task.interject',
-      params: {
-        taskId: 'task-1',
-        guidance: 'Focus on the auth boundary',
-      },
+      method: 'v1.command.approval.resolve',
+      params: { approvalId: 'approval-1', action: 'approve' },
     });
 
     expect(res.error).toBeUndefined();
-    expect(res.result).toEqual({
-      taskId: 'task-1',
-      guidance: 'Focus on the auth boundary',
-    });
-  });
-
-  it('handles v1.task.review.respond', async () => {
-    const handle = setup();
-    const res = await handle({
-      id: '1',
-      method: 'v1.task.review.respond',
-      params: {
-        taskId: 'task-1',
-        action: 'modify',
-        guidance: 'Tighten the auth boundary.',
-      },
-    });
-
-    expect(res.error).toBeUndefined();
-    expect(res.result).toEqual({
-      taskId: 'task-1',
-      action: 'modify',
-      guidance: 'Tighten the auth boundary.',
-    });
+    expect((res.result as any).status).toBe('approved');
   });
 });

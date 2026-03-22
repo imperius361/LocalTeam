@@ -19,6 +19,13 @@ export function ProjectSettingsPanel({
   error,
   config,
 }: ProjectSettingsPanelProps) {
+  const teams = config?.teams ?? [];
+  const members = teams.flatMap((team) => team.members);
+  const boundMembers = members.filter((member) => member.runtimeProfileRef).length;
+  const defaultTeamName = teams.find((team) => team.id === config?.defaultTeamId)?.name
+    ?? teams[0]?.name
+    ?? 'No default team selected';
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -26,8 +33,8 @@ export function ProjectSettingsPanel({
         <span>{currentRoot ?? 'No git workspace selected'}</span>
       </div>
       <p className="settings-copy">
-        LocalTeam stores its own settings and runtime state in app data. The selected
-        git workspace is the repository LocalTeam operates against.
+        LocalTeam stores workspace selection and team definitions locally. Nemoclaw manages the
+        secure runtime, model-provider access, and secret material outside the repository.
       </p>
       <div className="settings-grid">
         <div className="workspace-summary">
@@ -36,7 +43,7 @@ export function ProjectSettingsPanel({
             <strong>{currentRoot ?? 'Choose a workspace to load it'}</strong>
             <small>
               {currentRoot
-                ? 'LocalTeam runs tasks against this workspace and keeps its own state outside the repo.'
+                ? 'Teams share this project workspace by default while each member binds to a Nemoclaw runtime profile.'
                 : 'Pick the repository you want LocalTeam to open.'}
             </small>
           </div>
@@ -63,9 +70,10 @@ export function ProjectSettingsPanel({
       {error && <p className="recovery-copy settings-error">{error}</p>}
       {config && (
         <div className="project-summary readonly">
-          <strong>{config.team.name}</strong>
+          <strong>{defaultTeamName}</strong>
           <span>
-            {config.team.agents.length} agents • {config.consensus.maxRounds} rounds •{' '}
+            {teams.length} team{teams.length === 1 ? '' : 's'} • {members.length} member
+            {members.length === 1 ? '' : 's'} • {boundMembers} bound •{' '}
             {config.sandbox.defaultMode} sandbox
           </span>
         </div>

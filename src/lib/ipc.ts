@@ -3,10 +3,13 @@ import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import type {
   CommandApproval,
+  NemoclawApprovalSummary,
+  NemoclawGatewayStatus,
+  NemoclawSessionSummary,
   ProjectConfig,
   ProjectSnapshot,
+  RuntimeProfileSummary,
   SidecarNotification,
-  TaskReviewAction,
 } from './contracts';
 
 let requestId = 0;
@@ -87,7 +90,7 @@ export async function callSidecar<T = unknown>(
 ): Promise<T> {
   if (method === 'v1.credentials.sync') {
     throw new Error(
-      'v1.credentials.sync is blocked from the webview. Use Rust credential commands.',
+      'v1.credentials.sync is no longer supported. Nemoclaw manages secrets.',
     );
   }
 
@@ -151,6 +154,38 @@ export async function saveProjectConfig(config: ProjectConfig): Promise<ProjectS
   return callSidecar<ProjectSnapshot>('v1.project.save', { config });
 }
 
+export async function getNemoclawStatus(): Promise<{
+  gateway: NemoclawGatewayStatus;
+  activeTeamId: string | null;
+  runtimeProfiles: RuntimeProfileSummary[];
+  sessions: NemoclawSessionSummary[];
+  approvals: NemoclawApprovalSummary[];
+}> {
+  return callSidecar('v1.nemoclaw.status');
+}
+
+export async function listRuntimeProfiles(): Promise<RuntimeProfileSummary[]> {
+  return callSidecar<RuntimeProfileSummary[]>('v1.nemoclaw.profiles.list');
+}
+
+export async function applyNemoclawTeam(teamId?: string): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.nemoclaw.team.apply', {
+    ...(teamId ? { teamId } : {}),
+  });
+}
+
+export async function startSession(teamId?: string): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.session.start', {
+    ...(teamId ? { teamId } : {}),
+  });
+}
+
+export async function stopSession(sessionId?: string): Promise<ProjectSnapshot> {
+  return callSidecar<ProjectSnapshot>('v1.session.stop', {
+    ...(sessionId ? { sessionId } : {}),
+  });
+}
+
 export async function listCommandApprovals(
   taskId?: string,
 ): Promise<CommandApproval[]> {
@@ -166,28 +201,6 @@ export async function resolveCommandApproval(
   return callSidecar<CommandApproval>('v1.command.approval.resolve', {
     approvalId,
     action,
-  });
-}
-
-export async function sendTaskGuidance(
-  taskId: string,
-  guidance?: string,
-): Promise<ProjectSnapshot> {
-  return callSidecar<ProjectSnapshot>('v1.task.interject', {
-    taskId,
-    ...(guidance ? { guidance } : {}),
-  });
-}
-
-export async function respondToTaskReview(
-  taskId: string,
-  action: TaskReviewAction,
-  guidance?: string,
-): Promise<ProjectSnapshot> {
-  return callSidecar<ProjectSnapshot>('v1.task.review.respond', {
-    taskId,
-    action,
-    ...(typeof guidance === 'string' ? { guidance } : {}),
   });
 }
 

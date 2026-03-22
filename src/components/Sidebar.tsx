@@ -48,7 +48,7 @@ export function Sidebar(): React.ReactElement {
     fontFamily: isPixel ? "'Press Start 2P', monospace" : undefined,
   };
 
-  const team = snapshot?.config?.team;
+  const teams = snapshot?.config?.teams ?? [];
   const agentStatuses = snapshot?.agentStatuses ?? [];
 
   // Determine projectPath and teamId from navState when not global
@@ -57,37 +57,38 @@ export function Sidebar(): React.ReactElement {
   const currentTeamId =
     navState.layer === 'team' || navState.layer === 'agent'
       ? navState.teamId
-      : undefined;
+      : snapshot?.activeTeamId ?? snapshot?.config?.defaultTeamId ?? teams[0]?.id;
   const currentAgentId =
     navState.layer === 'agent' ? navState.agentId : undefined;
+  const selectedTeam = currentTeamId
+    ? teams.find((entry) => entry.id === currentTeamId)
+    : teams[0];
 
   const isTeamActive =
     navState.layer === 'team' || navState.layer === 'agent';
 
   const sidecarReady = snapshot?.sidecar?.ready ?? false;
 
-  function handleTeamClick() {
-    if (!team || !projectPath) return;
-    navigate({ layer: 'team', projectPath, teamId: team.name });
+  function handleTeamClick(teamId: string) {
+    if (!projectPath) return;
+    navigate({ layer: 'team', projectPath, teamId });
   }
 
-  function handleAgentClick(agentId: string) {
-    if (!team || !projectPath) return;
+  function handleAgentClick(agentId: string, teamId: string) {
+    if (!projectPath) return;
     navigate({
       layer: 'agent',
       projectPath,
-      teamId: currentTeamId ?? team.name,
+      teamId,
       agentId,
     });
   }
-
-  const teamDotColor = team ? getTeamDotColor(agentStatuses) : 'var(--text-muted)';
 
   const teamDotStyle: React.CSSProperties = {
     width: 6,
     height: 6,
     borderRadius: isPixel ? 0 : '50%',
-    backgroundColor: teamDotColor,
+    backgroundColor: 'var(--text-muted)',
     flexShrink: 0,
   };
 
@@ -135,29 +136,56 @@ export function Sidebar(): React.ReactElement {
       {/* Teams section */}
       <div className="sidebar-section-title" style={sectionHeaderStyle}>Teams</div>
 
-      {team && (
-        <div
-          style={isTeamActive ? activeRowStyle : rowBaseStyle}
-          onClick={handleTeamClick}
-        >
-          <div style={teamDotStyle} />
-          <span
-            style={{
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              fontFamily: isPixel ? "'Press Start 2P', monospace" : undefined,
-            }}
+      {teams.map((team) => {
+        const teamStatuses = team.members
+          .map((member) => agentStatuses.find((status) => status.agentId === member.id))
+          .filter((status): status is AgentStatus => Boolean(status));
+        const isActiveTeam = isTeamActive && currentTeamId === team.id;
+
+        return (
+          <div
+            key={team.id}
+            style={isActiveTeam ? activeRowStyle : rowBaseStyle}
+            onClick={() => handleTeamClick(team.id)}
           >
-            {team.name}
-          </span>
-        </div>
-      )}
+            <div
+              style={{
+                ...teamDotStyle,
+                backgroundColor:
+                  teamStatuses.length > 0
+                    ? getTeamDotColor(teamStatuses)
+                    : 'var(--text-muted)',
+              }}
+            />
+            <span
+              style={{
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontFamily: isPixel ? "'Press Start 2P', monospace" : undefined,
+              }}
+            >
+              {team.name}
+            </span>
+          </div>
+        );
+      })}
 
       {/* Agents section */}
       <div className="sidebar-section-title" style={{ ...sectionHeaderStyle, marginTop: 8 }}>Agents</div>
 
-      {agentStatuses.map((agent) => {
+      {(selectedTeam?.members ?? []).map((member) => {
+        const agent =
+          agentStatuses.find((status) => status.agentId === member.id) ??
+          {
+            agentId: member.id,
+            role: member.role,
+            model: member.runtimeHint?.model ?? 'Not connected',
+            provider: member.runtimeHint?.provider ?? 'nemoclaw',
+            backend: 'nemoclaw' as const,
+            status: member.runtimeProfileRef ? 'idle' : 'unavailable',
+            hasCredentials: Boolean(member.runtimeProfileRef),
+          };
         const isActive =
           navState.layer === 'agent' && currentAgentId === agent.agentId;
 
@@ -165,7 +193,7 @@ export function Sidebar(): React.ReactElement {
           <div
             key={agent.agentId}
             style={isActive ? activeRowStyle : rowBaseStyle}
-            onClick={() => handleAgentClick(agent.agentId)}
+            onClick={() => handleAgentClick(agent.agentId, selectedTeam?.id ?? currentTeamId ?? '')}
           >
             <StatusBadge status={agent.status as AgentRunStatus} showLabel={false} />
             <span
@@ -176,7 +204,7 @@ export function Sidebar(): React.ReactElement {
                 fontFamily: isPixel ? "'Press Start 2P', monospace" : undefined,
               }}
             >
-              {agent.role}
+              {member.role}
             </span>
           </div>
         );

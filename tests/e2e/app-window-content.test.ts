@@ -21,6 +21,17 @@ vi.mock('../../src/lib/ipc', () => ({
   subscribeToWorkspaceSelections: vi.fn(async () => () => {}),
 }));
 
+vi.mock('../../src/lib/nemoclaw', () => ({
+  getNemoclawRuntimeStatus: vi.fn(async () => ({
+    onboardingCompleted: true,
+    profiles: [],
+  })),
+  launchNemoclawOnboarding: vi.fn(async () => ({
+    onboardingCompleted: true,
+    profiles: [],
+  })),
+}));
+
 import { AppWindowContent } from '../../src/App';
 
 function makeSnapshot(): ProjectSnapshot {
@@ -28,18 +39,27 @@ function makeSnapshot(): ProjectSnapshot {
     version: 'v1',
     projectRoot: 'C:\\Repositories\\LocalTeam',
     config: {
-      team: {
-        name: 'LocalTeam',
-        agents: [
-          {
-            id: 'architect',
-            role: 'Architect',
-            model: 'gpt-4.1-mini',
-            provider: 'openai',
-            systemPrompt: 'Plan work.',
-          },
-        ],
-      },
+      version: 2,
+      defaultTeamId: 'localteam',
+      teams: [
+        {
+          id: 'localteam',
+          name: 'LocalTeam',
+          workspaceMode: 'shared_project',
+          members: [
+            {
+              id: 'architect',
+              role: 'Architect',
+              runtimeProfileRef: 'profiles/openai-architect',
+              runtimeHint: {
+                provider: 'nemoclaw',
+                model: 'openclaw-local',
+              },
+              systemPrompt: 'Plan work.',
+            },
+          ],
+        },
+      ],
       consensus: {
         maxRounds: 3,
         requiredMajority: 0.66,
@@ -57,12 +77,27 @@ function makeSnapshot(): ProjectSnapshot {
     messages: [],
     consensus: [],
     agentStatuses: [],
-    credentials: [
-      { provider: 'openai', hasKey: true },
-      { provider: 'anthropic', hasKey: false },
-    ],
+    credentials: [],
     templates: [],
     commandApprovals: [],
+    gateway: {
+      ready: true,
+      onboardingCompleted: true,
+      profileCount: 1,
+      workspaceRoot: 'C:\\Repositories\\LocalTeam',
+    },
+    runtimeProfiles: [
+      {
+        id: 'profiles/openai-architect',
+        label: 'Architect Profile',
+        provider: 'nemoclaw',
+        model: 'openclaw-local',
+        availability: 'ready',
+      },
+    ],
+    sessions: [],
+    approvals: [],
+    activeTeamId: 'localteam',
     sidecar: {
       ready: true,
       version: '0.2.0',
@@ -84,6 +119,16 @@ afterEach(() => {
     credentials: [],
     templates: [],
     commandApprovals: [],
+    gateway: {
+      ready: false,
+      onboardingCompleted: false,
+      profileCount: 0,
+      workspaceRoot: null,
+    },
+    runtimeProfiles: [],
+    sessions: [],
+    approvals: [],
+    activeTeamId: null,
     sidecar: {
       ready: false,
       version: 'offline',
@@ -98,9 +143,10 @@ describe('App window routing', () => {
 
     const markup = renderToStaticMarkup(createElement(AppWindowContent));
 
-    expect(markup).toContain('LocalTeam Settings');
+    expect(markup).toContain('LocalTeam Runtime Settings');
     expect(markup).toContain('Project Settings');
-    expect(markup).toContain('Provider keys');
+    expect(markup).toContain('Managed Runtime');
+    expect(markup).toContain('Runtime Profile Bindings');
     expect(markup).not.toContain('Running Tasks');
   });
 });

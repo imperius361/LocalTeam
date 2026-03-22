@@ -12,10 +12,11 @@ export function CredentialOnboardingPrompt({
       <div className="settings-topbar">
         <div>
           <p className="eyebrow">First run</p>
-          <h2>Set up agent API keys</h2>
+          <h2>Connect Nemoclaw runtime access</h2>
           <p className="settings-copy">
-            LocalTeam can store provider keys in its encrypted vault so live agents are ready when
-            you need them. You can skip this and continue in mock mode.
+            Nemoclaw manages provider secrets, runtime profiles, and gateway security. Open
+            Settings to review the active workspace and runtime bindings before you start a team
+            session.
           </p>
         </div>
         <span className="settings-chip">One-time prompt</span>
@@ -24,15 +25,15 @@ export function CredentialOnboardingPrompt({
       <div className="settings-banner">
         <strong>What happens next?</strong>
         <p>
-          Open the Settings window to create or unlock the vault, add any provider keys you want
-          stored, and sync them into the runtime. If you skip now, LocalTeam will stop prompting
-          on this device until you open Settings manually.
+          Open the Settings window to inspect gateway status, choose the workspace, and confirm
+          which team members still need a Nemoclaw runtime profile ref. If you skip now, LocalTeam
+          will stop prompting on this device until you open Settings manually.
         </p>
       </div>
 
       <div className="settings-actions">
         <button className="secondary-button" type="button" onClick={onSkip}>
-          Continue without keys
+          Continue without setup
         </button>
         <button className="primary-button" type="button" onClick={onOpenSettings}>
           Open Settings

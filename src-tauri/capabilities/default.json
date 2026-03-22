@@ -5,9 +5,6 @@
   "permissions": [
     "core:default",
     "opener:default",
-    "stronghold:default",
-    "stronghold:allow-destroy",
-    "stronghold:allow-remove-store-record",
     "dialog:allow-open"
   ]
 }

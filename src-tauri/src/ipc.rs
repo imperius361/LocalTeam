@@ -2,7 +2,6 @@ use crate::sidecar;
 use serde_json::Value;
 use std::path::PathBuf;
 use tauri::AppHandle;
-use tauri::State;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 pub fn prompt_for_project_folder(
@@ -46,7 +45,8 @@ pub async fn send_to_sidecar(app: AppHandle, message: String) -> Result<(), Stri
             .is_some_and(|method| method == "v1.credentials.sync")
         {
             return Err(
-                "Direct credential sync is blocked. Use Rust credential commands.".into(),
+                "Direct credential sync is no longer supported. Nemoclaw manages secrets."
+                    .into(),
             );
         }
     }
@@ -57,12 +57,7 @@ pub async fn send_to_sidecar(app: AppHandle, message: String) -> Result<(), Stri
 #[tauri::command]
 pub async fn restart_sidecar(
     app: AppHandle,
-    credential_state: State<'_, crate::credentials::CredentialState>,
 ) -> Result<(), String> {
     sidecar::spawn_sidecar(&app)?;
-    let _ = crate::credentials::sync_loaded_credentials_to_sidecar(
-        &app,
-        credential_state.inner(),
-    )?;
     Ok(())
 }

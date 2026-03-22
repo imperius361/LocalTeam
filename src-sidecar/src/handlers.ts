@@ -37,158 +37,44 @@ export function createHandlers(
         return { id: req.id, result: await runtime.listTemplates() };
       case 'v1.templates.get':
         return { id: req.id, result: await runtime.getTemplate(String(req.params.id)) };
-      case 'v1.credentials.sync':
+      case 'v1.nemoclaw.status':
+        return { id: req.id, result: await runtime.getNemoclawStatus() };
+      case 'v1.nemoclaw.profiles.list':
+        return { id: req.id, result: await runtime.listRuntimeProfiles() };
+      case 'v1.nemoclaw.team.apply':
         return {
           id: req.id,
-          result: await runtime.syncCredentials((req.params.values ?? {}) as any),
+          result: await runtime.applyTeam(
+            typeof req.params.teamId === 'string' ? req.params.teamId : undefined,
+          ),
         };
+      case 'v1.nemoclaw.session.start':
       case 'v1.session.start':
-        return { id: req.id, result: await runtime.startSession() };
-      case 'v1.session.snapshot':
-        return { id: req.id, result: await runtime.status() };
-      case 'create_task':
-      case 'v1.task.create': {
-        const { title, description } = req.params;
-        if (typeof title !== 'string' || !title) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: title' },
-          };
-        }
-        if (typeof description !== 'string') {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: description' },
-          };
-        }
         return {
           id: req.id,
-          result: await runtime.createTask(
-            title,
-            description,
-            typeof req.params.parentTaskId === 'string'
-              ? req.params.parentTaskId
-              : undefined,
+          result: await runtime.startSession(
+            typeof req.params.teamId === 'string' ? req.params.teamId : undefined,
           ),
         };
-      }
-      case 'v1.task.interject': {
-        if (typeof req.params.taskId !== 'string' || !req.params.taskId) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: taskId' },
-          };
-        }
-        if (typeof req.params.guidance !== 'string' || !req.params.guidance.trim()) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: guidance' },
-          };
-        }
+      case 'v1.nemoclaw.session.stop':
+      case 'v1.session.stop':
         return {
           id: req.id,
-          result: await runtime.interjectTask(req.params.taskId, req.params.guidance),
-        };
-      }
-      case 'v1.task.review.respond': {
-        if (typeof req.params.taskId !== 'string' || !req.params.taskId) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: taskId' },
-          };
-        }
-        if (
-          req.params.action !== 'approve' &&
-          req.params.action !== 'modify' &&
-          req.params.action !== 'reject'
-        ) {
-          return {
-            id: req.id,
-            error: {
-              code: -3,
-              message: 'Invalid param: action must be approve|modify|reject',
-            },
-          };
-        }
-        if (
-          req.params.action === 'modify' &&
-          (typeof req.params.guidance !== 'string' || !req.params.guidance.trim())
-        ) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: guidance' },
-          };
-        }
-        return {
-          id: req.id,
-          result: await runtime.respondToTaskReview(
-            req.params.taskId,
-            req.params.action,
-            typeof req.params.guidance === 'string' ? req.params.guidance : undefined,
+          result: await runtime.stopSession(
+            typeof req.params.sessionId === 'string' ? req.params.sessionId : undefined,
           ),
         };
-      }
-      case 'list_tasks':
-      case 'v1.task.list':
-        return { id: req.id, result: await runtime.listTasks() };
-      case 'v1.messages.list':
+      case 'v1.nemoclaw.sessions.list':
+        return { id: req.id, result: await runtime.listSessions() };
+      case 'v1.nemoclaw.events.list':
         return {
           id: req.id,
-          result: await runtime.listMessages(
-            typeof req.params.taskId === 'string' ? req.params.taskId : undefined,
+          result: await runtime.observeSession(
+            typeof req.params.sessionId === 'string' ? req.params.sessionId : undefined,
           ),
         };
-      case 'v1.command.execute': {
-        if (typeof req.params.taskId !== 'string' || !req.params.taskId) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: taskId' },
-          };
-        }
-        if (typeof req.params.agentId !== 'string' || !req.params.agentId) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: agentId' },
-          };
-        }
-        if (typeof req.params.command !== 'string' || !req.params.command.trim()) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: command' },
-          };
-        }
-
-        return {
-          id: req.id,
-          result: await runtime.requestCommandExecution({
-            taskId: req.params.taskId,
-            agentId: req.params.agentId,
-            command: req.params.command,
-            cwd: typeof req.params.cwd === 'string' ? req.params.cwd : undefined,
-          }),
-        };
-      }
-      case 'v1.command.approval.resolve': {
-        if (typeof req.params.approvalId !== 'string' || !req.params.approvalId) {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Missing required param: approvalId' },
-          };
-        }
-        if (req.params.action !== 'approve' && req.params.action !== 'deny') {
-          return {
-            id: req.id,
-            error: { code: -3, message: 'Invalid param: action must be approve|deny' },
-          };
-        }
-        return {
-          id: req.id,
-          result: await runtime.resolveCommandApproval(
-            req.params.approvalId,
-            req.params.action,
-          ),
-        };
-      }
+      case 'v1.nemoclaw.approvals.list':
+        return { id: req.id, result: await runtime.listApprovals() };
       case 'v1.command.approval.list':
         return {
           id: req.id,
@@ -196,15 +82,12 @@ export function createHandlers(
             typeof req.params.taskId === 'string' ? req.params.taskId : undefined,
           ),
         };
-      case 'v1.consensus.resolve':
+      case 'v1.command.approval.resolve':
         return {
           id: req.id,
-          result: await runtime.resolveConsensus(
-            String(req.params.taskId),
-            req.params.action as 'continue' | 'override' | 'approve_majority',
-            typeof req.params.overrideMessage === 'string'
-              ? req.params.overrideMessage
-              : undefined,
+          result: await runtime.resolveApproval(
+            String(req.params.approvalId),
+            req.params.action === 'deny' ? 'deny' : 'approve',
           ),
         };
       case 'get_agents':

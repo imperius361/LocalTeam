@@ -1,62 +1,32 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync, watch } from 'node:fs';
-import { copyFile, mkdir, readFile, readdir } from 'node:fs/promises';
+import { existsSync, statSync } from 'node:fs';
+import { mkdir, readFile, readdir } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { assignAgentsByRole } from './assignment.js';
-import { evaluateCommandPolicy } from './command-safety.js';
-import { ConsensusProtocol } from './consensus.js';
 import {
-  buildDecompositionPrompt,
-  deriveSubtasksFromLeadOutput,
-  selectLeadAgent,
-} from './decomposition.js';
-import { MessageBus } from './message-bus.js';
-import { Orchestrator } from './orchestrator.js';
-import type { MessageErrorEvent } from './orchestrator.js';
-import {
-  ProjectDatabase,
   readWorkspaceConfig,
-  resolveWorkspaceDatabasePath,
-  resolveWorkspaceStorageRoot,
   writeWorkspaceConfig,
 } from './persistence.js';
 import type { IpcNotification } from './protocol.js';
-import { createAgent } from './providers/factory.js';
-import { TaskManager } from './task-manager.js';
+import { NemoclawGatewayBridge } from './gateway-bridge.js';
 import {
+  normalizeProjectConfig,
   parseProjectConfig,
   validateProjectConfig,
 } from './team-config.js';
 import { canonicalizeWorkspacePath } from './workspace-path.js';
 import type {
-  AgentConfig,
-  CommandApproval,
-  CommandExecutionRequest,
   AgentMessage,
   AgentStatus,
-  ConsensusState,
-  MessageStreamFinalization,
-  MessageStreamDelta,
+  CommandApproval,
   ProjectConfig,
   ProjectSnapshot,
-  ProviderCredentialStatus,
-  ProviderId,
   SessionState,
-  Task,
   TemplateSummary,
 } from './types.js';
 
 const DEFAULT_TEMPLATE_FILE = 'default-team.json';
-const DEFAULT_VERSION = '0.2.0';
-const DEFAULT_CONSENSUS = {
-  maxRounds: 3,
-  requiredMajority: 0.66,
-} satisfies ProjectConfig['consensus'];
-const DEFAULT_SANDBOX = {
-  defaultMode: 'worktree',
-  useWorktrees: true,
-} satisfies ProjectConfig['sandbox'];
+const DEFAULT_VERSION = '0.3.0';
 const DEFAULT_FILE_ACCESS = {
   denyList: [
     '.env',
@@ -76,127 +46,68 @@ const DEFAULT_FILE_ACCESS = {
     '*.tfstate',
     '*.tfstate.*',
   ],
-} satisfies ProjectConfig['fileAccess'];
-const FALLBACK_DEFAULT_TEAM = {
-  name: 'Default LocalTeam',
-  agents: [
+};
+const DEFAULT_SANDBOX = {
+  defaultMode: 'worktree',
+  useWorktrees: true,
+};
+const FALLBACK_DEFAULT_TEAM: ProjectConfig = normalizeProjectConfig({
+  version: 2,
+  defaultTeamId: 'default-localteam',
+  teams: [
     {
-      id: 'architect',
-      role: 'Software Architect',
-      model: 'gpt-4.1-mini',
-      provider: 'openai',
-      systemPrompt:
-        'You are the lead architect. Drive the plan, decompose work, and keep the team aligned on scope and tradeoffs.',
-      tools: ['read_file', 'search_code', 'propose_task'],
-      allowedPaths: ['src/', 'src-sidecar/', 'src-tauri/', 'docs/'],
-      canExecuteCommands: false,
-    },
-    {
-      id: 'implementer',
-      role: 'Implementation Engineer',
-      model: 'gpt-4.1-mini',
-      provider: 'openai',
-      systemPrompt:
-        'You implement the agreed change set, call out risks early, and keep the code path practical.',
-      tools: ['read_file', 'search_code', 'artifact'],
-      allowedPaths: ['src/', 'src-sidecar/', 'src-tauri/'],
-      canExecuteCommands: false,
-    },
-    {
-      id: 'security',
-      role: 'Security Engineer',
-      model: 'gpt-4.1-mini',
-      provider: 'openai',
-      systemPrompt:
-        'You review for auth, secrets, sandboxing, unsafe execution, and least-privilege defaults.',
-      tools: ['read_file', 'search_code', 'objection'],
-      allowedPaths: ['src/', 'src-sidecar/', 'src-tauri/', 'docs/'],
-      canExecuteCommands: false,
+      id: 'default-localteam',
+      name: 'Default LocalTeam',
+      workspaceMode: 'shared_project',
+      members: [
+        {
+          id: 'architect',
+          role: 'Software Architect',
+          systemPrompt:
+            'You are the lead architect. Drive the plan, decompose work, and keep the team aligned on scope and tradeoffs.',
+          runtimeProfileRef: null,
+          runtimeHint: {
+            provider: 'nemoclaw',
+            model: 'openclaw-local',
+          },
+          tools: ['read_file', 'search_code', 'propose_task'],
+          allowedPaths: ['src/', 'src-sidecar/', 'src-tauri/', 'docs/'],
+          canExecuteCommands: false,
+        },
+      ],
     },
   ],
-} satisfies { name: string; agents: AgentConfig[] };
+  sandbox: DEFAULT_SANDBOX,
+  fileAccess: DEFAULT_FILE_ACCESS,
+});
 
 export class LocalTeamRuntime {
   private readonly startedAt = Date.now();
-  private readonly messageBus = new MessageBus();
-  private readonly orchestrator = new Orchestrator(this.messageBus);
-  private readonly taskManager = new TaskManager();
-  private readonly credentials = new Map<ProviderId, string>();
-  private readonly agentStatuses = new Map<string, AgentStatus>();
-  private readonly consensusStates = new Map<string, ConsensusState>();
-  private readonly commandApprovals = new Map<string, CommandApproval>();
-  private readonly taskGuidanceQueue = new Map<string, string[]>();
-  private readonly activeTaskRuns = new Set<string>();
   private readonly defaultProjectRoot = resolveDefaultProjectRoot();
   private readonly templatesDir = resolveTemplatesDirectory(this.defaultProjectRoot);
+  private readonly gateway = new NemoclawGatewayBridge();
 
   private projectRoot: string | null = null;
   private config: ProjectConfig | null = null;
   private session: SessionState | null = null;
-  private database: ProjectDatabase | null = null;
-  private projectWatcher?: ReturnType<typeof watch>;
   private lastError?: string;
 
-  constructor(
-    private readonly notify: (notification: IpcNotification) => void,
-  ) {
-    this.messageBus.on('message', (message) => {
-      void this.database?.saveMessage(message);
-      this.notify({
-        method: 'v1.session.message',
-        params: { message },
-      });
-    });
-  }
+  constructor(private readonly notify: (notification: IpcNotification) => void) {}
 
   async status(): Promise<ProjectSnapshot> {
     return this.getSnapshot();
   }
 
   dispose(): void {
-    this.clearLoadedProject();
-  }
-
-  private clearLoadedProject(): void {
-    this.projectWatcher?.close();
-    this.projectWatcher = undefined;
     this.projectRoot = null;
     this.config = null;
     this.session = null;
-    this.database = null;
-    this.consensusStates.clear();
-    this.commandApprovals.clear();
-    this.taskGuidanceQueue.clear();
-    this.activeTaskRuns.clear();
-    this.taskManager.hydrate([]);
-    this.messageBus.hydrate([]);
-    this.agentStatuses.clear();
     this.lastError = undefined;
   }
 
-  private async ensureProjectLoaded(): Promise<void> {
-    if (!this.config || !this.projectRoot) {
-      await this.loadProject();
-    }
-
-    if (!this.config || !this.projectRoot) {
-      throw new Error('No git workspace selected');
-    }
-  }
-
-  private normalizeSelectedRoot(rootPath?: string | null): string | null {
-    if (typeof rootPath !== 'string') {
-      return null;
-    }
-
-    const trimmed = rootPath.trim();
-    return trimmed ? canonicalizeWorkspacePath(trimmed) : null;
-  }
-
   async loadProject(rootPath?: string): Promise<ProjectSnapshot> {
-    const selectedRoot = this.normalizeSelectedRoot(rootPath ?? this.defaultProjectRoot);
+    const selectedRoot = rootPath?.trim() || this.projectRoot || this.defaultProjectRoot;
     if (!selectedRoot) {
-      this.clearLoadedProject();
       const snapshot = await this.getSnapshot();
       this.emitSnapshot(snapshot);
       return snapshot;
@@ -207,35 +118,12 @@ export class LocalTeamRuntime {
       throw new Error(`Selected folder is not a git workspace: ${selectedRoot}`);
     }
 
-    const config = await this.loadWorkspaceConfig(projectRoot);
-    await this.migrateLegacyWorkspaceState(projectRoot);
-
-    const database = await ProjectDatabase.open(projectRoot);
-    const state = await database.loadState();
-
-    this.projectWatcher?.close();
-    this.projectWatcher = undefined;
-    this.taskGuidanceQueue.clear();
-    this.activeTaskRuns.clear();
-    this.lastError = undefined;
-
     this.projectRoot = projectRoot;
-    this.config = config;
-    this.database = database;
-    this.messageBus.hydrate(state.messages);
-    this.taskManager.hydrate(state.tasks);
-    this.consensusStates.clear();
-    state.consensus.forEach((entry) => {
-      this.consensusStates.set(entry.taskId, entry);
-    });
-    this.commandApprovals.clear();
-    state.commandApprovals.forEach((approval) => {
-      this.commandApprovals.set(approval.id, approval);
-    });
-    this.session = state.session;
+    this.config = await this.loadWorkspaceConfig(projectRoot);
+    if (this.session && this.session.projectRoot !== projectRoot) {
+      this.session = null;
+    }
 
-    this.rebuildAgents();
-    this.startProjectWatcher(projectRoot);
     const snapshot = await this.getSnapshot();
     this.emitSnapshot(snapshot);
     return snapshot;
@@ -247,18 +135,15 @@ export class LocalTeamRuntime {
       throw new Error(`Invalid workspace config: ${errors.join('; ')}`);
     }
 
-    const projectRoot = this.projectRoot;
-    if (!projectRoot) {
+    if (!this.projectRoot) {
       throw new Error('No git workspace selected');
     }
 
-    const resolvedRoot = await resolveGitWorkspaceRoot(projectRoot);
-    if (!resolvedRoot) {
-      throw new Error(`Selected folder is not a git workspace: ${projectRoot}`);
-    }
-
-    await writeWorkspaceConfig(resolvedRoot, config);
-    return this.loadProject(projectRoot);
+    await writeWorkspaceConfig(this.projectRoot, config);
+    this.config = config;
+    const snapshot = await this.getSnapshot();
+    this.emitSnapshot(snapshot);
+    return snapshot;
   }
 
   async listTemplates(): Promise<TemplateSummary[]> {
@@ -267,55 +152,137 @@ export class LocalTeamRuntime {
 
   async getTemplate(id: string): Promise<ProjectConfig> {
     const raw = await readFile(join(this.templatesDir, `${id}.json`), 'utf8');
-    const template = JSON.parse(raw) as {
-      name: string;
-      agents: AgentConfig[];
-      description?: string;
-    };
+    return createProjectConfigFromTemplate(JSON.parse(raw));
+  }
 
+  async getNemoclawStatus(): Promise<Record<string, unknown>> {
+    const gateway = await this.gateway.getStatus(this.projectRoot);
+    const config = this.config;
+    const activeTeamId = this.gateway.getActiveTeamId() ?? config?.defaultTeamId ?? null;
     return {
-      team: {
-        name: template.name,
-        agents: template.agents,
-      },
-      consensus: this.config?.consensus ?? {
-        maxRounds: 3,
-        requiredMajority: 0.66,
-      },
-      sandbox: this.config?.sandbox ?? {
-        defaultMode: 'worktree',
-        useWorktrees: true,
-      },
-      fileAccess: this.config?.fileAccess ?? {
-        denyList: [
-          '.env',
-          '.env.*',
-          '.git',
-          '.git/',
-          '.git-credentials',
-          '.npmrc',
-          '.pypirc',
-          '.ssh',
-          '.ssh/',
-          'credentials*',
-          '*.key',
-          '*.pem',
-          '*.p12',
-          '*.pfx',
-          '*.tfstate',
-          '*.tfstate.*',
-        ],
-      },
+      gateway,
+      activeTeamId,
+      runtimeProfiles: await this.gateway.listProfiles(),
+      sessions: this.gateway.listSessions(),
+      approvals: this.gateway.listApprovals(),
     };
   }
 
-  private async createDefaultProjectConfig(): Promise<ProjectConfig> {
-    const template = await readTemplateFile(join(this.templatesDir, DEFAULT_TEMPLATE_FILE));
-    if (template) {
-      return createProjectConfigFromTemplate(template);
+  async listRuntimeProfiles(): Promise<unknown[]> {
+    return this.gateway.listProfiles();
+  }
+
+  async applyTeam(teamId?: string): Promise<ProjectSnapshot> {
+    const config = this.ensureConfig();
+    const team = selectTeam(config, teamId);
+    if (!team) {
+      throw new Error('No team is available to apply');
     }
 
-    return createProjectConfigFromTemplate(FALLBACK_DEFAULT_TEAM);
+    await this.gateway.applyTeam(team.id);
+    const snapshot = await this.getSnapshot();
+    this.notify({
+      method: 'v1.nemoclaw.team.applied',
+      params: { teamId: team.id },
+    });
+    this.emitSnapshot(snapshot);
+    return snapshot;
+  }
+
+  async startSession(teamId?: string): Promise<ProjectSnapshot> {
+    const config = this.ensureConfig();
+    const team = selectTeam(config, teamId);
+    if (!team) {
+      throw new Error('No team is available to start a session');
+    }
+
+    await this.gateway.applyTeam(team.id);
+    const gatewaySession = await this.gateway.startSession(team.id, team.name, team.members);
+    this.session = {
+      id: gatewaySession.id,
+      projectRoot: this.projectRoot ?? '',
+      projectName: team.name,
+      teamId: team.id,
+      createdAt: gatewaySession.createdAt,
+      updatedAt: gatewaySession.updatedAt,
+      status: 'running',
+    };
+
+    const snapshot = await this.getSnapshot();
+    this.notify({
+      method: 'v1.session.updated',
+      params: { session: this.session },
+    });
+    this.emitSnapshot(snapshot);
+    return snapshot;
+  }
+
+  async stopSession(sessionId?: string): Promise<ProjectSnapshot> {
+    const currentSessionId = sessionId ?? this.session?.id;
+    if (!currentSessionId) {
+      throw new Error('No active session to stop');
+    }
+
+    const stopped = await this.gateway.stopSession(currentSessionId);
+    if (!stopped) {
+      throw new Error(`Unknown session: ${currentSessionId}`);
+    }
+
+    if (this.session?.id === currentSessionId) {
+      this.session = {
+        ...this.session,
+        updatedAt: stopped.updatedAt,
+        status: 'idle',
+      };
+    }
+
+    const snapshot = await this.getSnapshot();
+    this.notify({
+      method: 'v1.session.updated',
+      params: { session: this.session },
+    });
+    this.emitSnapshot(snapshot);
+    return snapshot;
+  }
+
+  async listSessions(): Promise<unknown[]> {
+    return this.gateway.listSessions();
+  }
+
+  async observeSession(sessionId?: string): Promise<unknown[]> {
+    return this.gateway.listEvents(sessionId);
+  }
+
+  async listApprovals(): Promise<unknown[]> {
+    return this.gateway.listApprovals();
+  }
+
+  async listCommandApprovals(taskId?: string): Promise<CommandApproval[]> {
+    const approvals = this.gateway.listApprovals().map((approval) =>
+      mapApprovalToCommandApproval(approval, this.projectRoot),
+    );
+    if (!taskId) {
+      return approvals;
+    }
+    return approvals.filter((approval) => approval.taskId === taskId);
+  }
+
+  async resolveApproval(
+    approvalId: string,
+    action: 'approve' | 'deny',
+  ): Promise<CommandApproval> {
+    const approval = await this.gateway.resolveApproval(approvalId, action);
+    if (!approval) {
+      throw new Error(`Unknown approval: ${approvalId}`);
+    }
+    return mapApprovalToCommandApproval(approval, this.projectRoot);
+  }
+
+  private ensureConfig(): ProjectConfig {
+    if (!this.config) {
+      throw new Error('No project configuration loaded');
+    }
+    return this.config;
   }
 
   private async loadWorkspaceConfig(projectRoot: string): Promise<ProjectConfig> {
@@ -358,1601 +325,102 @@ export class LocalTeamRuntime {
     }
   }
 
-  private async migrateLegacyWorkspaceState(projectRoot: string): Promise<void> {
-    const legacyDatabasePath = join(projectRoot, '.localteam', 'localteam.db');
-    const workspaceDatabasePath = resolveWorkspaceDatabasePath(projectRoot);
-    if (!existsSync(legacyDatabasePath) || existsSync(workspaceDatabasePath)) {
-      return;
+  private async createDefaultProjectConfig(): Promise<ProjectConfig> {
+    const template = await readTemplateFile(join(this.templatesDir, DEFAULT_TEMPLATE_FILE));
+    if (template) {
+      return createProjectConfigFromTemplate(template);
     }
 
-    await mkdir(resolveWorkspaceStorageRoot(projectRoot), { recursive: true });
-    await copyFile(legacyDatabasePath, workspaceDatabasePath);
-  }
-
-  async syncCredentials(
-    values: Partial<Record<Exclude<ProviderId, 'mock'>, string>>,
-  ): Promise<ProviderCredentialStatus[]> {
-    const syncedAt = Date.now();
-    for (const provider of ['openai', 'anthropic'] as const) {
-      const value = values[provider];
-      if (typeof value === 'string' && value.trim()) {
-        this.credentials.set(provider, value.trim());
-      } else if (value === '') {
-        this.credentials.delete(provider);
-      }
-    }
-
-    this.rebuildAgents();
-    const credentials = this.getCredentialStatuses(syncedAt);
-    this.notify({
-      method: 'v1.credentials.updated',
-      params: { credentials },
-    });
-    return credentials;
-  }
-
-  async startSession(): Promise<ProjectSnapshot> {
-    if (!this.config || !this.projectRoot) {
-      await this.loadProject();
-    }
-
-    if (!this.config || !this.projectRoot) {
-      return this.getSnapshot();
-    }
-
-    const now = Date.now();
-    this.session = this.session
-      ? {
-          ...this.session,
-          updatedAt: now,
-          status: 'idle',
-        }
-      : {
-          id: randomUUID(),
-          projectRoot: this.projectRoot!,
-          projectName: this.config!.team.name,
-          createdAt: now,
-          updatedAt: now,
-          status: 'idle',
-        };
-
-    await this.database?.saveSession(this.session);
-    this.notify({
-      method: 'v1.session.updated',
-      params: { session: this.session },
-    });
-    return this.getSnapshot();
-  }
-
-  async createTask(
-    title: string,
-    description: string,
-    parentTaskId?: string,
-  ): Promise<ProjectSnapshot> {
-    await this.ensureProjectLoaded();
-
-    if (!this.session) {
-      await this.startSession();
-    }
-
-    const manager = this.getManagerAgentConfig();
-    const assignedAgents = parentTaskId
-      ? this.selectAgentsForTask(title, description, 1)
-      : manager
-        ? [manager.id]
-        : this.selectAgentsForTask(title, description, 1);
-
-    const task = this.taskManager.create(title, description, {
-      parentTaskId,
-      assignedAgents,
-      sessionId: this.session?.id,
-      consensusState: 'pending',
-      origin: parentTaskId ? 'agent_subtask' : 'user_request',
-      managerAgentId: manager?.id,
-    });
-
-    await this.persistAndNotifyTask(task.id);
-    if (!parentTaskId) {
-      this.emitUserMessage(
-        task.id,
-        description.trim() ? `${title}\n\n${description.trim()}` : title,
-        'User Request',
-        manager?.id ?? 'manager',
-      );
-    }
-
-    void this.runTask(task.id);
-    return this.getSnapshot();
-  }
-
-  async interjectTask(taskId: string, guidance: string): Promise<ProjectSnapshot> {
-    await this.ensureProjectLoaded();
-
-    const task = this.taskManager.get(taskId);
-    if (!task) {
-      throw new Error(`Task not found: ${taskId}`);
-    }
-
-    const trimmedGuidance = guidance.trim();
-    if (!trimmedGuidance) {
-      throw new Error('Guidance must not be empty');
-    }
-
-    if (task.origin === 'user_request' && task.status === 'review') {
-      return this.respondToTaskReview(taskId, 'modify', trimmedGuidance);
-    }
-
-    this.emitUserMessage(
-      taskId,
-      trimmedGuidance,
-      task.origin === 'user_request' ? 'Modify' : 'Guidance',
-      task.managerAgentId ?? task.assignedAgents[0] ?? 'manager',
-    );
-    this.queueTaskGuidance(taskId, trimmedGuidance);
-    this.notify({
-      method: 'v1.task.interjected',
-      params: {
-        taskId,
-        guidance: trimmedGuidance,
-        running: this.activeTaskRuns.has(taskId),
-      },
-    });
-
-    this.notifyShellNotification('info', 'Task guidance received', task.title);
-
-    if (!this.activeTaskRuns.has(taskId)) {
-      this.taskManager.update(taskId, {
-        status: 'in_progress',
-        consensusState: 'pending',
-      });
-      await this.persistAndNotifyTask(taskId);
-      void this.runTask(taskId);
-    }
-
-    return this.getSnapshot();
-  }
-
-  async respondToTaskReview(
-    taskId: string,
-    action: 'approve' | 'modify' | 'reject',
-    guidance?: string,
-  ): Promise<ProjectSnapshot> {
-    await this.ensureProjectLoaded();
-
-    const task = this.taskManager.get(taskId);
-    if (!task) {
-      throw new Error(`Task not found: ${taskId}`);
-    }
-    if (task.origin !== 'user_request') {
-      throw new Error('Only user request tasks can receive review responses.');
-    }
-
-    const trimmedGuidance =
-      typeof guidance === 'string' && guidance.trim() ? guidance.trim() : undefined;
-    if (action === 'modify' && !trimmedGuidance) {
-      throw new Error('Guidance must not be empty');
-    }
-
-    const managerId = task.managerAgentId ?? this.getManagerAgentConfig()?.id ?? 'manager';
-    const userContent =
-      action === 'modify'
-        ? trimmedGuidance!
-        : action === 'approve'
-          ? 'User approved the manager plan.'
-          : 'User rejected the manager plan.';
-    this.emitUserMessage(taskId, userContent, REVIEW_EDGE_LABELS[action], managerId);
-
-    const reviewSummary = task.reviewSummary
-      ? {
-          ...task.reviewSummary,
-          lastUserAction: action,
-        }
-      : undefined;
-
-    if (action === 'reject') {
-      this.taskManager.update(taskId, {
-        status: 'cancelled',
-        reviewSummary,
-      });
-      await this.persistAndNotifyTask(taskId);
-      await this.refreshSessionStatus();
-      return this.getSnapshot();
-    }
-
-    this.taskManager.update(taskId, {
-      status: 'in_progress',
-      consensusState: 'pending',
-      reviewSummary,
-    });
-    await this.persistAndNotifyTask(taskId);
-
-    if (action === 'modify') {
-      void this.runTask(taskId, trimmedGuidance);
-      return this.getSnapshot();
-    }
-
-    await this.createAgentSubtasks(taskId);
-    const createdSubtasks = this.taskManager
-      .list()
-      .filter((entry) => entry.parentTaskId === taskId);
-    if (createdSubtasks.length === 0) {
-      this.taskManager.update(taskId, { status: 'completed' });
-      await this.persistAndNotifyTask(taskId);
-    } else {
-      await this.refreshSessionStatus();
-    }
-    return this.getSnapshot();
-  }
-
-  async listTasks(): Promise<Task[]> {
-    return this.taskManager.list();
-  }
-
-  async listMessages(taskId?: string): Promise<AgentMessage[]> {
-    return this.messageBus.getHistory(taskId);
-  }
-
-  async listCommandApprovals(taskId?: string): Promise<CommandApproval[]> {
-    const approvals = Array.from(this.commandApprovals.values()).sort(
-      (left, right) => left.requestedAt - right.requestedAt,
-    );
-    if (!taskId) {
-      return approvals;
-    }
-    return approvals.filter((approval) => approval.taskId === taskId);
-  }
-
-  async requestCommandExecution(
-    request: CommandExecutionRequest,
-  ): Promise<CommandApproval> {
-    await this.ensureProjectLoaded();
-
-    const task = this.taskManager.get(request.taskId);
-    if (!task) {
-      throw new Error(`Task not found: ${request.taskId}`);
-    }
-    const projectRoot = this.projectRoot;
-    const config = this.config;
-    if (!projectRoot || !config) {
-      throw new Error('No git workspace selected');
-    }
-
-    const agent = config.team.agents.find((entry) => entry.id === request.agentId);
-    if (!agent) {
-      throw new Error(`Agent not found: ${request.agentId}`);
-    }
-
-    const policy = evaluateCommandPolicy({
-      projectRoot,
-      config,
-      task,
-      agent,
-      request,
-    });
-
-    const now = Date.now();
-    const approval: CommandApproval = {
-      id: randomUUID(),
-      taskId: request.taskId,
-      agentId: request.agentId,
-      agentRole: agent.role,
-      command: request.command,
-      requestedCwd: request.cwd,
-      effectiveCwd: policy.effectiveCwd,
-      status: policy.allowed
-        ? policy.requiresApproval
-          ? 'pending'
-          : 'approved'
-        : 'denied',
-      requiresApproval: policy.requiresApproval,
-      preApproved: policy.preApproved,
-      reason: policy.reason,
-      requestedAt: now,
-      updatedAt: now,
-      decidedAt: policy.allowed ? undefined : now,
-      policy: {
-        sandboxMode: policy.sandboxMode,
-        checkedPaths: policy.checkedPaths,
-        allowedPaths: policy.allowedPaths,
-        matchedDenyRule: policy.matchedDenyRule,
-      },
-    };
-
-    this.commandApprovals.set(approval.id, approval);
-    await this.database?.saveCommandApproval(approval);
-    this.notify({
-      method: 'v1.command.approval.updated',
-      params: { approval },
-    });
-
-    if (!policy.allowed) {
-      return approval;
-    }
-
-    if (policy.requiresApproval) {
-      this.notify({
-        method: 'v1.command.approval.required',
-        params: { approval },
-      });
-      return approval;
-    }
-
-    return this.executeApprovedCommand(approval.id);
-  }
-
-  async resolveCommandApproval(
-    approvalId: string,
-    action: 'approve' | 'deny',
-  ): Promise<CommandApproval> {
-    const existing = this.commandApprovals.get(approvalId);
-    if (!existing) {
-      throw new Error(`Command approval not found: ${approvalId}`);
-    }
-    if (existing.status !== 'pending') {
-      return existing;
-    }
-
-    const now = Date.now();
-    const updated: CommandApproval = {
-      ...existing,
-      status: action === 'approve' ? 'approved' : 'denied',
-      decidedAt: now,
-      updatedAt: now,
-      reason:
-        action === 'deny'
-          ? existing.reason ?? 'User denied command execution.'
-          : existing.reason,
-    };
-    this.commandApprovals.set(updated.id, updated);
-    await this.database?.saveCommandApproval(updated);
-    this.notify({
-      method: 'v1.command.approval.updated',
-      params: { approval: updated },
-    });
-
-    if (action === 'deny') {
-      return updated;
-    }
-
-    return this.executeApprovedCommand(updated.id);
-  }
-
-  async resolveConsensus(
-    taskId: string,
-    action: 'continue' | 'override' | 'approve_majority',
-    overrideMessage?: string,
-  ): Promise<ProjectSnapshot> {
-    await this.ensureProjectLoaded();
-
-    const task = this.taskManager.get(taskId);
-    if (!task) {
-      throw new Error(`Task not found: ${taskId}`);
-    }
-
-    if (task.origin === 'user_request' && task.status === 'review') {
-      if (action === 'continue') {
-        return this.respondToTaskReview(taskId, 'modify', overrideMessage);
-      }
-      return this.respondToTaskReview(taskId, 'approve', overrideMessage);
-    }
-
-    if (action === 'override') {
-      this.emitUserMessage(
-        taskId,
-        overrideMessage?.trim() || 'User approved a manual override.',
-        'Approve',
-        task.managerAgentId ?? this.getManagerAgentConfig()?.id ?? 'manager',
-      );
-      this.taskManager.update(taskId, {
-        status: 'completed',
-        consensusState: 'reached',
-      });
-      await this.persistAndNotifyTask(taskId);
-      await this.updateParentTaskState(task.parentTaskId);
-      return this.getSnapshot();
-    }
-
-    this.taskManager.update(taskId, {
-      status: 'in_progress',
-      consensusState: 'pending',
-    });
-    await this.persistAndNotifyTask(taskId);
-    void this.runTask(taskId, action === 'continue' ? overrideMessage : undefined);
-    return this.getSnapshot();
-  }
-
-  private async runTask(taskId: string, userGuidance?: string): Promise<void> {
-    if (this.activeTaskRuns.has(taskId)) {
-      if (typeof userGuidance === 'string' && userGuidance.trim()) {
-        this.queueTaskGuidance(taskId, userGuidance.trim());
-      }
-      return;
-    }
-
-    this.activeTaskRuns.add(taskId);
-    let streamFailureReported = false;
-    const reportStreamFailure = async (
-      task: Task,
-      stage: string,
-      event: MessageErrorEvent,
-    ): Promise<void> => {
-      streamFailureReported = true;
-      const errorDetail = this.formatError(event.error);
-      this.recordAgentError(event.agentId, errorDetail);
-      this.lastError = errorDetail;
-      this.emitSystemMessage(
-        task.id,
-        `LocalTeam could not continue ${stage} because ${event.agentRole} failed to respond: ${errorDetail}`,
-        {
-          id: event.messageId,
-          round: event.round,
-          timestamp: event.timestamp,
-          meta: {
-            stage,
-            failedAgentId: event.agentId,
-            failedAgentRole: event.agentRole,
-            error: errorDetail,
-          },
-        },
-      );
-      this.notifyMessageFinalization({
-        messageId: event.messageId,
-        taskId: event.taskId,
-        agentId: event.agentId,
-        round: event.round,
-        timestamp: Date.now(),
-      });
-    };
-
-    try {
-      const task = this.taskManager.get(taskId);
-      if (!task || !this.config) {
-        return;
-      }
-
-      let pendingGuidance = this.consumeTaskGuidance(taskId, userGuidance);
-
-      if (task.origin === 'user_request') {
-        await this.runPlanningTask(
-          task,
-          pendingGuidance,
-          async (activeTask, stage, event) => reportStreamFailure(activeTask, stage, event),
-        );
-        return;
-      }
-
-      const refreshedTask = this.taskManager.get(taskId);
-      if (!refreshedTask) {
-        return;
-      }
-
-      if (refreshedTask.status === 'pending') {
-        this.taskManager.transition(taskId, 'in_progress');
-      } else {
-        this.taskManager.update(taskId, { status: 'in_progress' });
-      }
-
-      const sandboxPath = await this.prepareSandbox(taskId);
-      if (sandboxPath) {
-        const diffStat = await this.getSandboxDiffStat(sandboxPath);
-        this.taskManager.setSandbox(taskId, sandboxPath, diffStat);
-      } else if (this.config.sandbox.defaultMode === 'worktree') {
-        this.taskManager.setSandbox(taskId, undefined, undefined);
-      }
-
-      await this.persistAndNotifyTask(taskId);
-      await this.updateSessionStatus('running');
-
-      const activeTask = this.taskManager.get(taskId);
-      if (!activeTask) {
-        return;
-      }
-
-      const participantAgentIds = this.resolveParticipatingAgents(activeTask);
-      if (participantAgentIds.length === 0) {
-        this.taskManager.transition(taskId, 'review');
-        await this.persistAndNotifyTask(taskId);
-        this.emitSystemMessage(
-          taskId,
-          `LocalTeam could not start this discussion because no eligible agents were available for "${activeTask.title}".`,
-          {
-            meta: {
-              reason: 'no_eligible_agents',
-            },
-          },
-        );
-        this.resetAgentStatuses();
-        await this.refreshSessionStatus();
-        this.notifyShellNotification(
-          'warning',
-          'No eligible agents',
-          activeTask.title,
-        );
-        await this.updateParentTaskState(activeTask.parentTaskId);
-        return;
-      }
-
-      const participantAgents = this.config.team.agents.filter((agent) =>
-        participantAgentIds.includes(agent.id),
-      );
-
-      if (
-        activeTask.assignedAgents.length !== participantAgentIds.length ||
-        activeTask.assignedAgents.some((id) => !participantAgentIds.includes(id))
-      ) {
-        this.taskManager.assign(taskId, participantAgentIds);
-        await this.persistAndNotifyTask(taskId);
-      }
-
-      const consensus = new ConsensusProtocol(this.config.consensus);
-      const managerId = activeTask.managerAgentId ?? this.getManagerAgentConfig()?.id ?? participantAgentIds[0];
-      let prompt = buildExecutionPrompt(participantAgents, activeTask, pendingGuidance);
-
-      for (let round = 1; round <= this.config.consensus.maxRounds; round++) {
-        for (const agentId of participantAgentIds) {
-          this.setAgentStatus(agentId, 'thinking');
-        }
-
-        for await (const message of this.orchestrator.runRound(taskId, prompt, round, {
-          agentIds: participantAgentIds,
-          decorateMessage: (finalMessage) => ({
-            ...finalMessage,
-            meta: mergeMessageMeta(finalMessage.meta, {
-              flow: buildTaskFlowMeta(
-                finalMessage.agentId,
-                managerId,
-                getFlowLabelForMessage(finalMessage.type, 'execution'),
-                'execution',
-                'manager',
-                round,
-              ),
-            }),
-          }),
-          onStreamDelta: async (event) =>
-            this.notifyStreamDelta({
-              ...event,
-              meta: {
-                flow: buildTaskFlowMeta(
-                  event.agentId,
-                  managerId,
-                  getFlowLabelForMessage(inferMessageType(event.content), 'execution'),
-                  'execution',
-                  'manager',
-                  round,
-                ),
-              },
-            }),
-          onMessageFinalized: async ({ message }) =>
-            this.notifyMessageFinalization({
-              messageId: message.id,
-              taskId: message.taskId ?? taskId,
-              agentId: message.agentId,
-              round: message.round ?? round,
-              timestamp: Date.now(),
-            }),
-          onMessageError: async (event) =>
-            reportStreamFailure(activeTask, `round ${round}`, event),
-        })) {
-          this.setAgentStatus(message.agentId, 'writing');
-          consensus.recordPosition(message.agentId, message.content);
-          const tokenEstimate =
-            (this.taskManager.get(taskId)?.tokenEstimate ?? 0) +
-            (message.tokenEstimate ?? 0);
-          this.taskManager.updateTokenEstimate(taskId, tokenEstimate);
-          await this.database?.saveTask(this.taskManager.get(taskId)!);
-          this.setAgentStatus(message.agentId, 'waiting_for_consensus');
-        }
-
-        const result = consensus.evaluate(participantAgentIds);
-        const state: ConsensusState = {
-          taskId,
-          round,
-          status: result.status === 'reached' ? 'reached' : 'pending',
-          supporters: result.status === 'reached' ? result.supporters : [],
-          summary: consensus.getEscalationSummary(),
-          updatedAt: Date.now(),
-        };
-        this.consensusStates.set(taskId, state);
-        await this.database?.saveConsensus(state);
-        this.notify({
-          method: 'v1.consensus.updated',
-          params: { consensus: state },
-        });
-
-        if (result.status === 'reached') {
-          this.taskManager.setConsensusState(taskId, 'reached');
-          this.taskManager.transition(taskId, 'completed');
-          await this.persistAndNotifyTask(taskId);
-          this.resetAgentStatuses();
-          await this.refreshSessionStatus();
-          this.notifyShellNotification('info', 'Task completed', activeTask.title);
-          await this.updateParentTaskState(activeTask.parentTaskId);
-          return;
-        }
-
-        if (round >= this.config.consensus.maxRounds) {
-          const escalated: ConsensusState = {
-            ...state,
-            status: 'escalated',
-            updatedAt: Date.now(),
-          };
-          this.consensusStates.set(taskId, escalated);
-          this.taskManager.setConsensusState(taskId, 'escalated');
-          this.taskManager.transition(taskId, 'review');
-          await this.database?.saveConsensus(escalated);
-          await this.persistAndNotifyTask(taskId);
-          this.resetAgentStatuses();
-          await this.refreshSessionStatus();
-          this.notify({
-            method: 'v1.consensus.updated',
-            params: { consensus: escalated },
-          });
-          this.notifyShellNotification('warning', 'Consensus required', activeTask.title);
-          await this.updateParentTaskState(activeTask.parentTaskId);
-          return;
-        }
-
-        const nextGuidance = this.consumeTaskGuidance(taskId);
-        const followUpPrompt = buildExecutionFollowUpPrompt(
-          activeTask,
-          round + 1,
-          consensus.getEscalationSummary(),
-        );
-        prompt = nextGuidance
-          ? [nextGuidance, followUpPrompt].join('\n\n')
-          : followUpPrompt;
-      }
-    } catch (error) {
-      await this.handleTaskRunFailure(taskId, error, streamFailureReported);
-    } finally {
-      this.activeTaskRuns.delete(taskId);
-      const followUpGuidance = this.consumeTaskGuidance(taskId);
-      if (followUpGuidance) {
-        void this.runTask(taskId, followUpGuidance);
-      }
-    }
-  }
-
-  private async runPlanningTask(
-    task: Task,
-    pendingGuidance: string | undefined,
-    onMessageError: (
-      task: Task,
-      stage: string,
-      event: MessageErrorEvent,
-    ) => Promise<void> | void,
-  ): Promise<void> {
-    if (!this.config) {
-      return;
-    }
-
-    const manager = this.getManagerAgentConfig(task);
-    const managerId = manager?.id ?? task.managerAgentId ?? 'manager';
-
-    if (task.status === 'pending') {
-      this.taskManager.transition(task.id, 'in_progress');
-    } else {
-      this.taskManager.update(task.id, { status: 'in_progress' });
-    }
-    this.taskManager.update(task.id, {
-      managerAgentId: managerId,
-      assignedAgents: manager ? [manager.id] : task.assignedAgents,
-    });
-    await this.persistAndNotifyTask(task.id);
-    await this.updateSessionStatus('running');
-
-    const participantAgentIds = this.resolvePlanningParticipants(task, managerId);
-    if (participantAgentIds.length === 0) {
-      const fallbackState: ConsensusState = {
-        taskId: task.id,
-        round: 0,
-        status: 'escalated',
-        supporters: [],
-        summary: [],
-        updatedAt: Date.now(),
-      };
-      this.consensusStates.set(task.id, fallbackState);
-      await this.database?.saveConsensus(fallbackState);
-      this.notify({
-        method: 'v1.consensus.updated',
-        params: { consensus: fallbackState },
-      });
-      await this.presentTaskForReview(task.id, fallbackState);
-      this.resetAgentStatuses();
-      await this.refreshSessionStatus();
-      return;
-    }
-
-    const participantAgents = this.config.team.agents.filter((agent) =>
-      participantAgentIds.includes(agent.id),
-    );
-    const consensus = new ConsensusProtocol(this.config.consensus);
-    let prompt = buildPlanningPrompt(participantAgents, task, pendingGuidance);
-
-    for (let round = 1; round <= this.config.consensus.maxRounds; round++) {
-      for (const agentId of participantAgentIds) {
-        this.setAgentStatus(agentId, 'thinking');
-      }
-
-      for await (const message of this.orchestrator.runRound(task.id, prompt, round, {
-        agentIds: participantAgentIds,
-        decorateMessage: (finalMessage) => ({
-          ...finalMessage,
-          meta: mergeMessageMeta(finalMessage.meta, {
-            flow: buildTaskFlowMeta(
-              finalMessage.agentId,
-              managerId,
-              getFlowLabelForMessage(finalMessage.type, 'planning'),
-              'planning',
-              'manager',
-              round,
-            ),
-          }),
-        }),
-        onStreamDelta: async (event) =>
-          this.notifyStreamDelta({
-            ...event,
-            meta: {
-              flow: buildTaskFlowMeta(
-                event.agentId,
-                managerId,
-                getFlowLabelForMessage(inferMessageType(event.content), 'planning'),
-                'planning',
-                'manager',
-                round,
-              ),
-            },
-          }),
-        onMessageFinalized: async ({ message }) =>
-          this.notifyMessageFinalization({
-            messageId: message.id,
-            taskId: message.taskId ?? task.id,
-            agentId: message.agentId,
-            round: message.round ?? round,
-            timestamp: Date.now(),
-          }),
-        onMessageError: async (event) =>
-          onMessageError(task, `planning round ${round}`, event),
-      })) {
-        this.setAgentStatus(message.agentId, 'writing');
-        consensus.recordPosition(message.agentId, message.content);
-        const tokenEstimate =
-          (this.taskManager.get(task.id)?.tokenEstimate ?? 0) +
-          (message.tokenEstimate ?? 0);
-        this.taskManager.updateTokenEstimate(task.id, tokenEstimate);
-        await this.database?.saveTask(this.taskManager.get(task.id)!);
-        this.setAgentStatus(message.agentId, 'waiting_for_consensus');
-      }
-
-      const result = consensus.evaluate(participantAgentIds);
-      const state: ConsensusState = {
-        taskId: task.id,
-        round,
-        status: result.status === 'reached' ? 'reached' : 'pending',
-        supporters: result.status === 'reached' ? result.supporters : [],
-        summary: consensus.getEscalationSummary(),
-        updatedAt: Date.now(),
-      };
-
-      const persistedState =
-        result.status === 'reached' || round < this.config.consensus.maxRounds
-          ? state
-          : {
-              ...state,
-              status: 'escalated' as const,
-              updatedAt: Date.now(),
-            };
-      this.consensusStates.set(task.id, persistedState);
-      await this.database?.saveConsensus(persistedState);
-      this.notify({
-        method: 'v1.consensus.updated',
-        params: { consensus: persistedState },
-      });
-
-      if (result.status === 'reached' || round >= this.config.consensus.maxRounds) {
-        await this.presentTaskForReview(task.id, persistedState);
-        this.resetAgentStatuses();
-        await this.refreshSessionStatus();
-        this.notifyShellNotification('info', 'Plan ready for review', task.title);
-        return;
-      }
-
-      const nextGuidance = this.consumeTaskGuidance(task.id);
-      const followUpPrompt = buildPlanningFollowUpPrompt(
-        task,
-        round + 1,
-        consensus.getEscalationSummary(),
-      );
-      prompt = nextGuidance
-        ? [nextGuidance, followUpPrompt].join('\n\n')
-        : followUpPrompt;
-    }
-  }
-
-  private async createAgentSubtasks(
-    taskId: string,
-  ): Promise<Task[]> {
-    if (!this.config) {
-      return [];
-    }
-
-    const task = this.taskManager.get(taskId);
-    if (!task) {
-      return [];
-    }
-
-    const existingSubtasks = this.taskManager
-      .list()
-      .filter((entry) => entry.parentTaskId === taskId);
-    if (existingSubtasks.length > 0) {
-      for (const existing of existingSubtasks) {
-        if (existing.status === 'pending' || existing.status === 'review') {
-          if (existing.status === 'review') {
-            this.taskManager.update(existing.id, {
-              status: 'pending',
-              consensusState: 'pending',
-            });
-            await this.persistAndNotifyTask(existing.id);
-          }
-          if (!this.activeTaskRuns.has(existing.id)) {
-            void this.runTask(existing.id);
-          }
-        }
-      }
-      return existingSubtasks.map((entry) => this.taskManager.get(entry.id) ?? entry);
-    }
-
-    const manager = this.getManagerAgentConfig(task);
-    if (!manager) {
-      return [];
-    }
-
-    const seedContent =
-      task.reviewSummary?.summaryText || task.description || task.title;
-    const subtasks = deriveSubtasksFromLeadOutput(
-      task,
-      this.config.team.agents,
-      seedContent,
-    );
-    const created: Task[] = [];
-
-    for (const subtaskSpec of subtasks) {
-      const subtask = this.taskManager.createSubtask(
-        taskId,
-        subtaskSpec.title,
-        subtaskSpec.description,
-      );
-      const assignees = assignAgentsByRole(
-        this.config.team.agents,
-        subtask.title,
-        subtask.description,
-        {
-          roleHint: subtaskSpec.roleHint,
-          maxAgents: 1,
-          fallbackAgentId: manager.id,
-        },
-      );
-      this.taskManager.assign(subtask.id, assignees);
-      this.taskManager.update(subtask.id, {
-        sessionId: task.sessionId,
-        consensusState: 'pending',
-        origin: 'agent_subtask',
-        createdByAgentId: manager.id,
-        managerAgentId: manager.id,
-      });
-      const persisted = this.taskManager.get(subtask.id)!;
-      await this.persistAndNotifyTask(persisted.id);
-      created.push(persisted);
-      this.emitTaskMessage({
-        id: randomUUID(),
-        agentId: manager.id,
-        agentRole: manager.role,
-        type: 'system',
-        content: `Assigned subtask "${persisted.title}" to ${this.getAgentRole(assignees[0])}.`,
-        timestamp: Date.now(),
-        taskId,
-        tokenEstimate: estimateTokens(persisted.title),
-        meta: {
-          flow: buildTaskFlowMeta(
-            manager.id,
-            assignees[0] ?? manager.id,
-            'Executes',
-            'execution',
-            'manager',
-          ),
-        },
-      });
-      void this.runTask(persisted.id);
-    }
-
-    return created;
-  }
-
-  private resolveParticipatingAgents(task: Task): string[] {
-    if (!this.config) {
-      return [];
-    }
-
-    const available = new Set(this.config.team.agents.map((agent) => agent.id));
-    const assigned = task.assignedAgents.filter((agentId) => available.has(agentId));
-    if (assigned.length > 0) {
-      return assigned;
-    }
-
-    const fallback = this.selectAgentsForTask(task.title, task.description, task.parentTaskId ? 1 : 2);
-    return fallback.filter((agentId) => available.has(agentId));
-  }
-
-  private resolvePlanningParticipants(task: Task, managerId: string): string[] {
-    if (!this.config) {
-      return [];
-    }
-
-    const available = this.config.team.agents
-      .map((agent) => agent.id)
-      .filter((agentId) => agentId !== managerId);
-
-    if (available.length > 0) {
-      return available;
-    }
-
-    return managerId ? [managerId] : [];
-  }
-
-  private getManagerAgentConfig(task?: Task): AgentConfig | undefined {
-    if (!this.config) {
-      return undefined;
-    }
-
-    const taskManagerAgentId = task?.managerAgentId;
-    if (taskManagerAgentId) {
-      const explicit = this.config.team.agents.find((agent) => agent.id === taskManagerAgentId);
-      if (explicit) {
-        return explicit;
-      }
-    }
-
-    return selectLeadAgent(this.config.team.agents);
-  }
-
-  private getAgentRole(agentId?: string): string {
-    if (!agentId) {
-      return 'Unassigned agent';
-    }
-
-    const status = this.agentStatuses.get(agentId);
-    if (status) {
-      return status.role;
-    }
-
-    return this.config?.team.agents.find((agent) => agent.id === agentId)?.role ?? agentId;
-  }
-
-  private async persistAndNotifyTask(taskId: string): Promise<Task | undefined> {
-    const task = this.taskManager.get(taskId);
-    if (!task) {
-      return undefined;
-    }
-
-    await this.database?.saveTask(task);
-    this.notify({
-      method: 'v1.task.updated',
-      params: { task },
-    });
-    return task;
-  }
-
-  private emitTaskMessage(message: AgentMessage): AgentMessage {
-    this.messageBus.emit(message);
-    return message;
-  }
-
-  private emitUserMessage(
-    taskId: string,
-    content: string,
-    edgeLabel: string,
-    toId: string,
-  ): AgentMessage {
-    return this.emitTaskMessage({
-      id: randomUUID(),
-      agentId: 'user',
-      agentRole: 'User',
-      type: 'user',
-      content,
-      timestamp: Date.now(),
-      taskId,
-      tokenEstimate: estimateTokens(content),
-      meta: {
-        flow: buildTaskFlowMeta('user', toId, edgeLabel, 'request', 'manager'),
-      },
-    });
-  }
-
-  private async presentTaskForReview(
-    taskId: string,
-    consensusState: ConsensusState,
-  ): Promise<void> {
-    const task = this.taskManager.get(taskId);
-    if (!task) {
-      return;
-    }
-
-    const manager = this.getManagerAgentConfig(task);
-    const managerId = manager?.id ?? task.managerAgentId ?? 'manager';
-    const summaryText = this.buildReviewSummary(task, consensusState);
-    const summaryMessage = this.emitTaskMessage({
-      id: randomUUID(),
-      agentId: managerId,
-      agentRole: manager?.role ?? 'Team Manager',
-      type: 'proposal',
-      content: summaryText,
-      timestamp: Date.now(),
-      taskId,
-      tokenEstimate: estimateTokens(summaryText),
-      meta: {
-        flow: buildTaskFlowMeta(
-          managerId,
-          'user',
-          'Plan',
-          'review',
-          'user',
-          consensusState.round,
-        ),
-      },
-    });
-
-    this.taskManager.update(taskId, {
-      status: 'review',
-      consensusState: consensusState.status === 'reached' ? 'reached' : 'escalated',
-      managerAgentId: managerId,
-      assignedAgents: manager ? [manager.id] : task.assignedAgents,
-      reviewSummary: {
-        proposalMessageId: summaryMessage.id,
-        summaryText,
-        presentedAt: summaryMessage.timestamp,
-        lastUserAction: task.reviewSummary?.lastUserAction,
-      },
-    });
-    await this.persistAndNotifyTask(taskId);
-  }
-
-  private buildReviewSummary(task: Task, consensusState: ConsensusState): string {
-    const messages = this.messageBus
-      .getHistory(task.id)
-      .filter((entry) => entry.agentId !== 'user' && entry.agentId !== 'system');
-    const preferredMessage =
-      [...messages]
-        .reverse()
-        .find((entry) => entry.type === 'proposal') ??
-      [...messages]
-        .reverse()
-        .find((entry) => entry.type === 'discussion' || entry.type === 'consensus');
-    const planBody = normalizeAgentResponse(preferredMessage?.content);
-    const teamSummary = consensusState.summary
-      .map((entry) => `${this.getAgentRole(entry.agentId)}: ${normalizeAgentResponse(entry.position)}`)
-      .join('\n');
-
-    return [
-      `Manager review for "${task.title}"`,
-      planBody || `Proceed with the plan for "${task.title}".`,
-      teamSummary ? `Team feedback:\n${teamSummary}` : null,
-      consensusState.status === 'reached'
-        ? 'Team discussion converged on this plan.'
-        : 'The team is still split, but this is the manager summary to review.',
-      'Respond with approve, modify, or reject.',
-    ]
-      .filter(Boolean)
-      .join('\n\n');
-  }
-
-  private async updateParentTaskState(parentTaskId?: string): Promise<void> {
-    if (!parentTaskId) {
-      return;
-    }
-
-    const parent = this.taskManager.get(parentTaskId);
-    if (!parent) {
-      return;
-    }
-
-    const children = this.taskManager
-      .list()
-      .filter((entry) => entry.parentTaskId === parentTaskId);
-    if (children.length === 0) {
-      return;
-    }
-
-    let nextStatus: Task['status'];
-    if (children.every((entry) => entry.status === 'completed')) {
-      nextStatus = 'completed';
-    } else if (children.some((entry) => entry.status === 'review')) {
-      nextStatus = 'review';
-    } else if (children.some((entry) => entry.status === 'in_progress' || entry.status === 'pending')) {
-      nextStatus = 'in_progress';
-    } else if (children.every((entry) => entry.status === 'cancelled')) {
-      nextStatus = 'cancelled';
-    } else {
-      nextStatus = parent.status;
-    }
-
-    const patch: Partial<Task> = { status: nextStatus };
-    if (nextStatus === 'review' && parent.reviewSummary) {
-      patch.reviewSummary = {
-        ...parent.reviewSummary,
-        summaryText: `${parent.reviewSummary.summaryText}\n\nExecution is waiting for at least one agent subtask to be resolved.`,
-      };
-    }
-
-    this.taskManager.update(parentTaskId, patch);
-    await this.persistAndNotifyTask(parentTaskId);
-  }
-
-  private rebuildAgents(): void {
-    this.orchestrator.getAgents().forEach((agent) => {
-      this.orchestrator.removeAgent(agent.id);
-    });
-    this.agentStatuses.clear();
-
-    for (const agentConfig of this.config?.team.agents ?? []) {
-      const { agent, hasCredentials, lastError } = createAgent(
-        agentConfig,
-        this.credentials,
-      );
-      this.orchestrator.addAgent(agent);
-      this.agentStatuses.set(agentConfig.id, {
-        agentId: agentConfig.id,
-        role: agentConfig.role,
-        model: agentConfig.model,
-        provider: agentConfig.provider,
-        status: hasCredentials || agentConfig.provider === 'mock' ? 'idle' : 'unavailable',
-        hasCredentials,
-        lastError,
-      });
-    }
-  }
-
-  private setAgentStatus(agentId: string, status: AgentStatus['status']): void {
-    const current = this.agentStatuses.get(agentId);
-    if (!current) {
-      return;
-    }
-
-    const next = {
-      ...current,
-      status,
-      lastError: status === 'thinking' ? undefined : current.lastError,
-    };
-    this.agentStatuses.set(agentId, next);
-    this.notify({
-      method: 'v1.agent.updated',
-      params: { agent: next },
-    });
-  }
-
-  private resetAgentStatuses(): void {
-    for (const [agentId, status] of this.agentStatuses) {
-      const next: AgentStatus = {
-        ...status,
-        status:
-          status.hasCredentials || status.provider === 'mock'
-            ? 'idle'
-            : 'unavailable',
-      };
-      this.agentStatuses.set(agentId, next);
-      if (next.status !== status.status) {
-        this.notify({
-          method: 'v1.agent.updated',
-          params: { agent: next },
-        });
-      }
-    }
-  }
-
-  private recordAgentError(agentId: string, errorDetail: string): void {
-    const current = this.agentStatuses.get(agentId);
-    if (!current) {
-      return;
-    }
-
-    const next = {
-      ...current,
-      lastError: errorDetail,
-    };
-    this.agentStatuses.set(agentId, next);
-    this.notify({
-      method: 'v1.agent.updated',
-      params: { agent: next },
-    });
-  }
-
-  private notifyStreamDelta(event: MessageStreamDelta): void {
-    this.notify({
-      method: 'v1.session.message.delta',
-      params: { delta: event },
-    });
-  }
-
-  private notifyMessageFinalization(event: MessageStreamFinalization): void {
-    this.notify({
-      method: 'v1.session.message.finalized',
-      params: { finalization: event },
-    });
-  }
-
-  private emitSystemMessage(
-    taskId: string,
-    content: string,
-    options: {
-      id?: string;
-      round?: number;
-      timestamp?: number;
-      meta?: Record<string, unknown>;
-    } = {},
-  ): void {
-    this.messageBus.emit({
-      id: options.id ?? randomUUID(),
-      agentId: 'system',
-      agentRole: 'System',
-      type: 'system',
-      content,
-      timestamp: options.timestamp ?? Date.now(),
-      taskId,
-      round: options.round,
-      tokenEstimate: estimateTokens(content),
-      meta: options.meta,
-    });
-  }
-
-  private notifyShellNotification(
-    level: 'info' | 'warning' | 'error',
-    title: string,
-    body: string,
-  ): void {
-    this.notify({
-      method: 'v1.shell.notification',
-      params: {
-        level,
-        title,
-        body,
-      },
-    });
-  }
-
-  private async updateSessionStatus(status: SessionState['status']): Promise<void> {
-    if (!this.session || this.session.status === status) {
-      return;
-    }
-
-    this.session = {
-      ...this.session,
-      status,
-      updatedAt: Date.now(),
-    };
-    await this.database?.saveSession(this.session);
-    this.notify({
-      method: 'v1.session.updated',
-      params: { session: this.session },
-    });
-  }
-
-  private async refreshSessionStatus(): Promise<void> {
-    if (!this.session) {
-      return;
-    }
-
-    const tasks = this.taskManager.list();
-    const hasRunningTask = tasks.some((task) => task.status === 'in_progress');
-    const hasReviewTask = tasks.some((task) => task.status === 'review');
-    const nextStatus = hasRunningTask
-      ? 'running'
-      : hasReviewTask
-        ? 'awaiting_user'
-        : 'idle';
-    await this.updateSessionStatus(nextStatus);
-  }
-
-  private formatError(error: unknown): string {
-    if (error instanceof Error && error.message.trim()) {
-      return error.message.trim();
-    }
-    if (typeof error === 'string' && error.trim()) {
-      return error.trim();
-    }
-    return 'Unknown runtime error';
-  }
-
-  private async handleTaskRunFailure(
-    taskId: string,
-    error: unknown,
-    streamFailureReported: boolean,
-  ): Promise<void> {
-    const errorDetail = this.formatError(error);
-    this.lastError = errorDetail;
-
-    const task = this.taskManager.get(taskId);
-    if (task) {
-      if (task.status === 'in_progress') {
-        this.taskManager.transition(taskId, 'review');
-      } else {
-        this.taskManager.update(taskId, { status: 'review' });
-      }
-      const updatedTask = await this.persistAndNotifyTask(taskId);
-      if (!streamFailureReported) {
-        this.emitSystemMessage(
-          taskId,
-          `LocalTeam could not continue "${updatedTask?.title ?? task.title}": ${errorDetail}`,
-          {
-            meta: {
-              error: errorDetail,
-            },
-          },
-        );
-      }
-    }
-
-    this.resetAgentStatuses();
-    await this.refreshSessionStatus();
-    this.notifyShellNotification(
-      'error',
-      'Task moved to review',
-      task ? `${task.title}: ${errorDetail}` : errorDetail,
-    );
-    await this.updateParentTaskState(task?.parentTaskId);
-  }
-
-  private selectAgentsForTask(
-    title: string,
-    description: string,
-    maxAgents: number,
-    roleHint?: string,
-  ): string[] {
-    if (!this.config) {
-      return [];
-    }
-
-    const lead = selectLeadAgent(this.config.team.agents);
-    return assignAgentsByRole(this.config.team.agents, title, description, {
-      roleHint,
-      maxAgents,
-      fallbackAgentId: lead?.id,
-    });
-  }
-
-  private async executeApprovedCommand(approvalId: string): Promise<CommandApproval> {
-    const approval = this.commandApprovals.get(approvalId);
-    if (!approval) {
-      throw new Error(`Command approval not found: ${approvalId}`);
-    }
-
-    const commandResult = await runShellCommand(approval.command, approval.effectiveCwd);
-    const now = Date.now();
-    const status = commandResult.exitCode === 0 ? 'completed' : 'failed';
-    const updated: CommandApproval = {
-      ...approval,
-      status,
-      updatedAt: now,
-      completedAt: now,
-      exitCode: commandResult.exitCode,
-      stdout: commandResult.stdout,
-      stderr: commandResult.stderr,
-      reason:
-        commandResult.exitCode === 0
-          ? approval.reason
-          : approval.reason ?? 'Command failed with a non-zero exit code.',
-    };
-
-    this.commandApprovals.set(updated.id, updated);
-    await this.database?.saveCommandApproval(updated);
-    this.notify({
-      method: 'v1.command.approval.updated',
-      params: { approval: updated },
-    });
-    this.notify({
-      method: 'v1.command.execution.completed',
-      params: { approval: updated },
-    });
-    return updated;
+    return FALLBACK_DEFAULT_TEAM;
   }
 
   private async refreshTemplates(): Promise<TemplateSummary[]> {
-    let entries;
+    let entries: { name: string }[] = [];
     try {
-      entries = await readdir(this.templatesDir, { withFileTypes: true });
-    } catch (error) {
-      if (isMissingFileError(error)) {
-        return [];
-      }
-      throw error;
+      entries = await readdir(this.templatesDir, { withFileTypes: true }) as any;
+    } catch {
+      return [];
     }
 
     const templates: TemplateSummary[] = [];
-
     for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+      if (!entry.name.endsWith('.json')) {
         continue;
       }
-
-      const id = entry.name.replace(/\.json$/, '');
       const raw = await readFile(join(this.templatesDir, entry.name), 'utf8');
-      const template = JSON.parse(raw) as {
-        name: string;
-        description?: string;
-        agents: AgentConfig[];
-      };
+      const config = createProjectConfigFromTemplate(JSON.parse(raw));
       templates.push({
-        id,
-        name: template.name,
-        description: template.description ?? `Built-in template: ${template.name}`,
+        id: entry.name.replace(/\.json$/i, ''),
+        name: selectTeam(config)?.name ?? entry.name.replace(/\.json$/i, ''),
+        description: `Built-in template: ${entry.name.replace(/\.json$/i, '')}`,
         path: join(this.templatesDir, entry.name),
-        providers: [...new Set(template.agents.map((agent) => agent.provider))],
-      });
+        runtimeProfiles: uniqueRuntimeProfiles(config),
+      } as any);
     }
 
     return templates.sort((left, right) => left.name.localeCompare(right.name));
   }
 
-  private queueTaskGuidance(taskId: string, guidance: string): void {
-    const queue = this.taskGuidanceQueue.get(taskId) ?? [];
-    queue.push(guidance);
-    this.taskGuidanceQueue.set(taskId, queue);
-  }
-
-  private consumeTaskGuidance(taskId: string, guidance?: string): string | undefined {
-    const items: string[] = [];
-    if (typeof guidance === 'string' && guidance.trim()) {
-      items.push(guidance.trim());
-    }
-
-    const queued = this.taskGuidanceQueue.get(taskId);
-    if (queued && queued.length > 0) {
-      items.push(...queued);
-      this.taskGuidanceQueue.delete(taskId);
-    }
-
-    return items.length > 0 ? items.join('\n\n') : undefined;
-  }
-
-  private getCredentialStatuses(syncedAt?: number): ProviderCredentialStatus[] {
-    return (['openai', 'anthropic'] as const).map((provider) => ({
-      provider,
-      hasKey: this.credentials.has(provider),
-      syncedAt: this.credentials.has(provider) ? syncedAt ?? Date.now() : undefined,
-    }));
-  }
-
-  private async prepareSandbox(taskId: string): Promise<string | undefined> {
-    if (
-      !this.config ||
-      !this.projectRoot ||
-      this.config.sandbox.defaultMode !== 'worktree' ||
-      !this.config.sandbox.useWorktrees
-    ) {
-      return undefined;
-    }
-
-    const workspaceStorageRoot = resolveWorkspaceStorageRoot(this.projectRoot);
-    const worktreeDirectory = resolve(workspaceStorageRoot, 'worktrees');
-    const worktreeRoot = resolve(worktreeDirectory, taskId);
-    await mkdir(worktreeDirectory, { recursive: true });
-
-    try {
-      await runGitCommand(this.projectRoot, [
-        'worktree',
-        'add',
-        '--force',
-        '--detach',
-        worktreeRoot,
-        'HEAD',
-      ]);
-      return worktreeRoot;
-    } catch (error) {
-      const errorDetail = this.formatError(error);
-      this.lastError = errorDetail;
-      const task = this.taskManager.get(taskId);
-      if (task) {
-        this.emitSystemMessage(
-          taskId,
-          `LocalTeam could not prepare a worktree for "${task.title}": ${errorDetail}`,
-          {
-            meta: {
-              stage: 'sandbox',
-              error: errorDetail,
-            },
-          },
-        );
-        this.notifyShellNotification(
-          'warning',
-          'Worktree setup failed',
-          `${task.title}: ${errorDetail}`,
-        );
-      }
-      return undefined;
-    }
-  }
-
-  private async getSandboxDiffStat(worktreePath: string): Promise<string | undefined> {
-    return runGitCommand(worktreePath, ['diff', '--stat']).catch(() => undefined);
-  }
-
-  private startProjectWatcher(projectRoot: string): void {
-    this.projectWatcher?.close();
-    if (!['win32', 'darwin'].includes(process.platform)) {
-      this.projectWatcher = undefined;
-      return;
-    }
-
-    try {
-      const watcher = watch(
-        projectRoot,
-        { recursive: true },
-        (eventType: string, filename: string | Buffer | null) => {
-          const relativePath =
-            typeof filename === 'string'
-              ? filename
-              : filename
-                ? filename.toString()
-                : null;
-
-          if (!relativePath || shouldIgnoreExternalChange(relativePath)) {
-            return;
-          }
-
-          this.notify({
-            method: 'v1.project.external_change',
-            params: {
-              eventType,
-              relativePath,
-            },
-          });
-        },
-      );
-      watcher.on('error', (error) => {
-        try {
-          watcher.close();
-        } catch {
-          // Ignore close failures while the watcher is already unwinding.
-        }
-
-        if (this.projectWatcher === watcher) {
-          this.projectWatcher = undefined;
-        }
-
-        if (isWatcherTeardownError(error)) {
-          return;
-        }
-
-        this.lastError = this.formatError(error);
-      });
-      this.projectWatcher = watcher;
-    } catch {
-      this.projectWatcher = undefined;
-    }
-  }
-
   private async getSnapshot(): Promise<ProjectSnapshot> {
+    const gatewayStatus = await this.gateway.getStatus(this.projectRoot);
+    const runtimeProfiles = await this.gateway.listProfiles();
+    const team = selectTeam(
+      this.config,
+      this.gateway.getActiveTeamId() ?? this.session?.teamId ?? undefined,
+    );
+
+    const messages = this.gateway.listEvents(this.session?.id).map<AgentMessage>((event) => ({
+      id: event.id,
+      agentId: event.agentId ?? 'nemoclaw',
+      agentRole: event.agentRole ?? 'Nemoclaw',
+      type: event.type === 'system' ? 'system' : 'discussion',
+      content: event.content,
+      timestamp: event.timestamp,
+    }));
+    const commandApprovals = this.gateway.listApprovals().map((approval) =>
+      mapApprovalToCommandApproval(approval, this.projectRoot),
+    );
+
+    const agentStatuses = (team?.members ?? []).map<AgentStatus>((member) => {
+      const profile = runtimeProfiles.find((entry) => entry.id === member.runtimeProfileRef);
+      return {
+        agentId: member.id,
+        role: member.role,
+        model: profile?.model ?? member.runtimeHint?.model ?? 'unbound',
+        provider: profile?.provider ?? member.runtimeHint?.provider ?? 'nemoclaw',
+        backend: 'nemoclaw',
+        status: this.session?.status === 'running' ? 'idle' : 'unavailable',
+        hasCredentials: gatewayStatus.ready && profile?.availability !== 'missing',
+        ...(member.runtimeProfileRef
+          ? {}
+          : { lastError: 'Member is not bound to a Nemoclaw runtime profile.' }),
+      };
+    });
+
     return {
       version: 'v1',
       projectRoot: this.projectRoot,
       config: this.config,
       session: this.session,
-      tasks: this.taskManager.list(),
-      messages: this.messageBus.getHistory(),
-      consensus: Array.from(this.consensusStates.values()).sort(
-        (left, right) => left.updatedAt - right.updatedAt,
-      ),
-      agentStatuses: Array.from(this.agentStatuses.values()),
-      credentials: this.getCredentialStatuses(),
+      tasks: [],
+      messages,
+      consensus: [],
+      agentStatuses,
+      credentials: [],
       templates: await this.refreshTemplates(),
-      commandApprovals: Array.from(this.commandApprovals.values()).sort(
-        (left, right) => left.requestedAt - right.requestedAt,
-      ),
+      commandApprovals,
       sidecar: {
         ready: true,
         version: DEFAULT_VERSION,
         uptime: Date.now() - this.startedAt,
-        lastError: this.lastError,
+        ...(this.lastError ? { lastError: this.lastError } : {}),
       },
-    };
+      gateway: gatewayStatus,
+      runtimeProfiles,
+      sessions: this.gateway.listSessions(),
+      approvals: this.gateway.listApprovals(),
+      activeTeamId: team?.id ?? null,
+    } as ProjectSnapshot;
   }
 
   private emitSnapshot(snapshot: ProjectSnapshot): void {
@@ -1960,202 +428,73 @@ export class LocalTeamRuntime {
       method: 'v1.snapshot',
       params: { snapshot },
     });
+    this.notify({
+      method: 'v1.nemoclaw.status',
+      params: {
+        gateway: (snapshot as any).gateway,
+        runtimeProfiles: (snapshot as any).runtimeProfiles,
+        sessions: (snapshot as any).sessions,
+        approvals: (snapshot as any).approvals,
+        activeTeamId: (snapshot as any).activeTeamId,
+      },
+    });
   }
 }
 
-export function shouldIgnoreExternalChange(relativePath: string): boolean {
-  const normalized = relativePath.replace(/\\/g, '/').replace(/^\.\/+/, '');
-  if (!normalized) {
-    return true;
-  }
-
-  return (
-    normalized === '.localteam' ||
-    normalized.startsWith('.localteam/') ||
-    normalized === 'EBWebView' ||
-    normalized.startsWith('EBWebView/') ||
-    normalized === 'WebView2' ||
-    normalized.startsWith('WebView2/') ||
-    normalized === 'Crashpad' ||
-    normalized.startsWith('Crashpad/')
-  );
-}
-
-function buildRoundPrompt(
-  agents: AgentConfig[],
-  task: Task,
-  userGuidance?: string,
-): string {
-  const roster = agents
-    .map((agent) => `- ${agent.role} (${agent.id})`)
-    .join('\n');
-
-  return [
-    'You are collaborating with the rest of the LocalTeam panel.',
-    `Task: ${task.title}`,
-    `Description: ${task.description}`,
-    userGuidance ? `Additional user guidance: ${userGuidance}` : null,
-    'Respond with one short position. Start with AGREE, OBJECTION, or PROPOSAL.',
-    'Reference the tradeoff you care about most. Keep it under 120 words.',
-    `Team roster:\n${roster}`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-}
-
-function buildPlanningPrompt(
-  agents: AgentConfig[],
-  task: Task,
-  userGuidance?: string,
-): string {
-  return buildRoundPrompt(agents, task, userGuidance);
-}
-
-function buildExecutionPrompt(
-  agents: AgentConfig[],
-  task: Task,
-  userGuidance?: string,
-): string {
-  const roster = agents
-    .map((agent) => `- ${agent.role} (${agent.id})`)
-    .join('\n');
-
-  return [
-    'You are executing an approved LocalTeam subtask.',
-    `Subtask: ${task.title}`,
-    `Description: ${task.description}`,
-    userGuidance ? `Additional user guidance: ${userGuidance}` : null,
-    'Respond with one short execution update. Start with AGREE, OBJECTION, or PROPOSAL.',
-    'Keep the update under 120 words.',
-    `Assigned roster:\n${roster}`,
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-}
-
-function buildFollowUpPrompt(
-  task: Task,
-  nextRound: number,
-  positions: ConsensusState['summary'],
-): string {
-  const summary = positions
-    .map((position) => `${position.agentId}: ${position.position}`)
-    .join('\n');
-
-  return [
-    `Round ${nextRound} for task "${task.title}".`,
-    'The previous positions were:',
-    summary,
-    'Respond again. Start with AGREE if you can align, otherwise start with OBJECTION or PROPOSAL.',
-  ].join('\n\n');
-}
-
-function buildPlanningFollowUpPrompt(
-  task: Task,
-  nextRound: number,
-  positions: ConsensusState['summary'],
-): string {
-  return buildFollowUpPrompt(task, nextRound, positions);
-}
-
-function buildExecutionFollowUpPrompt(
-  task: Task,
-  nextRound: number,
-  positions: ConsensusState['summary'],
-): string {
-  return [
-    buildFollowUpPrompt(task, nextRound, positions),
-    'Focus on concrete execution progress and blockers.',
-  ].join('\n\n');
-}
-
-const REVIEW_EDGE_LABELS = {
-  approve: 'Approve',
-  modify: 'Modify',
-  reject: 'Reject',
-} as const;
-
-function buildTaskFlowMeta(
-  fromId: string,
-  toId: string,
-  edgeLabel: string,
-  phase: 'request' | 'planning' | 'review' | 'execution',
-  audience: 'manager' | 'user',
-  round?: number,
-): NonNullable<AgentMessage['meta']>['flow'] {
+function mapApprovalToCommandApproval(
+  approval: ReturnType<NemoclawGatewayBridge['listApprovals']>[number],
+  projectRoot: string | null,
+): CommandApproval {
   return {
-    fromId,
-    toId,
-    edgeLabel,
-    phase,
-    audience,
-    ...(typeof round === 'number' ? { round } : {}),
+    id: approval.id,
+    taskId: `session:${approval.sessionId}`,
+    agentId: approval.agentId ?? 'nemoclaw',
+    agentRole: approval.agentRole ?? 'Nemoclaw',
+    command: approval.command ?? approval.summary,
+    effectiveCwd: projectRoot ?? '',
+    status:
+      approval.status === 'approved'
+        ? 'approved'
+        : approval.status === 'denied'
+          ? 'denied'
+          : 'pending',
+    requiresApproval: true,
+    preApproved: false,
+    reason: approval.summary,
+    requestedAt: approval.requestedAt,
+    updatedAt: approval.updatedAt,
+    policy: {
+      sandboxMode: 'worktree',
+      checkedPaths: [],
+      allowedPaths: [],
+    },
   };
 }
 
-function mergeMessageMeta(
-  existing: AgentMessage['meta'] | undefined,
-  next: AgentMessage['meta'],
-): AgentMessage['meta'] {
-  return {
-    ...(existing ?? {}),
-    ...(next ?? {}),
-  };
+function selectTeam(
+  config: ProjectConfig | null | undefined,
+  requestedTeamId?: string,
+): ProjectConfig['teams'][number] | null {
+  if (!config) {
+    return null;
+  }
+
+  const found = requestedTeamId
+    ? config.teams.find((team) => team.id === requestedTeamId)
+    : config.teams.find((team) => team.id === config.defaultTeamId);
+  return found ?? config.teams[0] ?? null;
 }
 
-function inferMessageType(content: string): AgentMessage['type'] {
-  const normalized = content.trimStart().toUpperCase();
-  if (normalized.startsWith('AGREE')) {
-    return 'consensus';
+function uniqueRuntimeProfiles(config: ProjectConfig): string[] {
+  const ids = new Set<string>();
+  for (const team of config.teams) {
+    for (const member of team.members) {
+      if (member.runtimeProfileRef) {
+        ids.add(member.runtimeProfileRef);
+      }
+    }
   }
-  if (normalized.startsWith('OBJECTION')) {
-    return 'objection';
-  }
-  if (normalized.startsWith('PROPOSAL')) {
-    return 'proposal';
-  }
-  return 'discussion';
-}
-
-function getFlowLabelForMessage(
-  type: AgentMessage['type'],
-  phase: 'planning' | 'execution',
-): string {
-  if (phase === 'execution' && type === 'consensus') {
-    return 'Reports Back';
-  }
-
-  switch (type) {
-    case 'proposal':
-      return 'Proposal';
-    case 'objection':
-      return 'Objection';
-    case 'consensus':
-      return phase === 'planning' ? 'Consensus' : 'Reports Back';
-    case 'discussion':
-      return phase === 'planning' ? 'Discussion' : 'Progress';
-    case 'artifact':
-      return 'Artifact';
-    case 'user':
-      return 'User Request';
-    case 'system':
-    default:
-      return 'Update';
-  }
-}
-
-function normalizeAgentResponse(content?: string): string {
-  if (!content) {
-    return '';
-  }
-
-  return content
-    .replace(/^(AGREE|OBJECTION|PROPOSAL)\s*:?\s*/i, '')
-    .trim();
-}
-
-function estimateTokens(content: string): number {
-  return Math.max(1, Math.ceil(content.length / 4));
+  return [...ids];
 }
 
 async function runGitCommand(cwd: string, args: string[]): Promise<string> {
@@ -2181,61 +520,6 @@ async function runGitCommand(cwd: string, args: string[]): Promise<string> {
       } else {
         rejectPromise(new Error(stderr.trim() || `git ${args.join(' ')} failed`));
       }
-    });
-  });
-}
-
-interface ShellCommandResult {
-  exitCode: number;
-  stdout: string;
-  stderr: string;
-}
-
-async function runShellCommand(command: string, cwd: string): Promise<ShellCommandResult> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const isWindows = process.platform === 'win32';
-    const shell = isWindows ? 'powershell.exe' : '/bin/bash';
-    const args = isWindows
-      ? ['-NoLogo', '-NoProfile', '-Command', command]
-      : ['-lc', command];
-
-    const child = spawn(shell, args, {
-      cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stdout = '';
-    let stderr = '';
-    const maxOutputLength = 64_000;
-    const timeout = setTimeout(() => {
-      child.kill('SIGTERM');
-    }, 60_000);
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString();
-      if (stdout.length > maxOutputLength) {
-        stdout = stdout.slice(0, maxOutputLength);
-      }
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString();
-      if (stderr.length > maxOutputLength) {
-        stderr = stderr.slice(0, maxOutputLength);
-      }
-    });
-
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      rejectPromise(error);
-    });
-
-    child.on('close', (code: number | null) => {
-      clearTimeout(timeout);
-      resolvePromise({
-        exitCode: code ?? 1,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-      });
     });
   });
 }
@@ -2286,21 +570,10 @@ function directoryExists(path: string): boolean {
   }
 }
 
-function isWatcherTeardownError(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error.code === 'EPERM' || error.code === 'ENOENT')
-  );
-}
-
-async function readTemplateFile(
-  path: string,
-): Promise<{ name: string; agents: AgentConfig[] } | null> {
+async function readTemplateFile(path: string): Promise<Record<string, unknown> | null> {
   try {
     const raw = await readFile(path, 'utf8');
-    return JSON.parse(raw) as { name: string; agents: AgentConfig[] };
+    return JSON.parse(raw) as Record<string, unknown>;
   } catch (error) {
     if (isMissingFileError(error)) {
       return null;
@@ -2309,21 +582,25 @@ async function readTemplateFile(
   }
 }
 
-function createProjectConfigFromTemplate(template: {
-  name: string;
-  agents: AgentConfig[];
-}): ProjectConfig {
-  return {
-    team: {
-      name: template.name,
-      agents: template.agents.map((agent) => ({ ...agent })),
-    },
-    consensus: { ...DEFAULT_CONSENSUS },
-    sandbox: { ...DEFAULT_SANDBOX },
-    fileAccess: {
-      denyList: [...DEFAULT_FILE_ACCESS.denyList],
-    },
-  };
+function createProjectConfigFromTemplate(template: Record<string, unknown>): ProjectConfig {
+  const normalized = normalizeProjectConfig(
+    template && typeof template === 'object'
+      ? {
+          ...template,
+          sandbox: {
+            ...DEFAULT_SANDBOX,
+            ...(((template as any).sandbox ?? {}) as Record<string, unknown>),
+          },
+          fileAccess: {
+            denyList: Array.isArray((template as any).fileAccess?.denyList)
+              ? (template as any).fileAccess.denyList
+              : [...DEFAULT_FILE_ACCESS.denyList],
+          },
+        }
+      : FALLBACK_DEFAULT_TEAM,
+  );
+
+  return normalized;
 }
 
 function isMissingFileError(error: unknown): boolean {

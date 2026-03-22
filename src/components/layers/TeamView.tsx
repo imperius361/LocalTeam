@@ -1,180 +1,268 @@
-import React, { useEffect, useState } from 'react';
-import {
-  Background,
-  Controls,
-  Handle,
-  Position,
-  ReactFlow,
-  type Edge,
-  type Node,
-  type NodeProps,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
+import React, { useMemo, useState } from 'react';
 
 import { useNav } from '../../navigation/NavContext';
+import {
+  applyNemoclawTeam,
+  resolveCommandApproval,
+  startSession,
+  stopSession,
+} from '../../lib/ipc';
+import { CommandApprovalsPanel } from '../CommandApprovalsPanel';
+import { StatusBadge } from '../common/StatusBadge';
 import { useAppStore } from '../../store/appStore';
-import { respondToTaskReview } from '../../lib/ipc';
-import type { AgentStatus } from '../../lib/contracts';
-import { buildTaskTreeRows } from '../../lib/taskSelectors';
-import { buildTeamFlowGraph } from '../../lib/teamFlow';
-import { ManagerReviewPanel } from '../team/ManagerReviewPanel';
-import { TaskHierarchyPanel } from '../team/TaskHierarchyPanel';
-
-interface FlowNodeData extends Record<string, unknown> {
-  id: string;
-  label: string;
-  kind: 'user' | 'manager' | 'agent';
-  status?: AgentStatus['status'];
-  onNavigate?: (agentId: string) => void;
-}
-
-function FlowNode({ data }: NodeProps<Node<FlowNodeData>>): React.ReactElement {
-  const borderColor =
-    data.kind === 'user'
-      ? 'var(--accent)'
-      : data.kind === 'manager'
-        ? 'var(--yellow)'
-        : 'var(--border)';
-  const canNavigate = data.kind !== 'user' && typeof data.onNavigate === 'function';
-
-  return (
-    <div
-      onClick={() => {
-        if (canNavigate) {
-          data.onNavigate?.(data.id);
-        }
-      }}
-      style={{
-        minWidth: 150,
-        background: 'var(--bg-panel)',
-        border: `1px solid ${borderColor}`,
-        padding: '10px 12px',
-        color: 'var(--text-primary)',
-        cursor: canNavigate ? 'pointer' : 'default',
-      }}
-    >
-      <Handle type="target" position={Position.Left} />
-      <div
-        style={{
-          fontSize: 10,
-          textTransform: 'uppercase',
-          letterSpacing: '1px',
-          color: 'var(--text-muted)',
-          marginBottom: 4,
-        }}
-      >
-        {data.kind}
-      </div>
-      <div style={{ fontSize: 12, marginBottom: 4 }}>{data.label}</div>
-      {data.status && (
-        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{data.status}</div>
-      )}
-      <Handle type="source" position={Position.Right} />
-    </div>
-  );
-}
-
-const nodeTypes = { flowNode: FlowNode };
+import type { AgentStatus, TeamMemberConfig } from '../../lib/contracts';
 
 export function TeamView(): React.ReactElement {
   const { navState, navigate } = useNav();
   const snapshot = useAppStore((s) => s.snapshot);
-  const liveMessageDeltas = useAppStore((s) => s.liveMessageDeltas);
+  const teamMap = useAppStore((s) => s.teamMap);
+  const agentStatusMap = useAppStore((s) => s.agentStatusMap);
+  const patchSnapshot = useAppStore((s) => s.patchSnapshot);
   const setSnapshot = useAppStore((s) => s.setSnapshot);
 
   const projectPath = navState.layer === 'team' ? navState.projectPath : '';
   const teamId = navState.layer === 'team' ? navState.teamId : '';
+  const team = teamMap[teamId] ?? snapshot?.config?.teams.find((entry) => entry.id === teamId) ?? null;
+  const [busyApprovalId, setBusyApprovalId] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+  const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
 
-  const tasks = snapshot?.tasks ?? [];
-  const taskRows = buildTaskTreeRows(tasks);
-  const [selectedRootTaskId, setSelectedRootTaskId] = useState<string | null>(
-    taskRows[0]?.task.id ?? null,
+  const memberIds = team?.members.map((member) => member.id) ?? [];
+  const recentMessages = useMemo(
+    () =>
+      [...(snapshot?.messages ?? [])]
+        .filter((message) => memberIds.includes(message.agentId))
+        .sort((left, right) => right.timestamp - left.timestamp)
+        .slice(0, 12),
+    [memberIds, snapshot?.messages],
   );
-  const [busyAction, setBusyAction] = useState<'approve' | 'modify' | 'reject' | null>(null);
-  const [modifyDraft, setModifyDraft] = useState('');
-  const [reviewError, setReviewError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!taskRows.some((row) => row.depth === 0 && row.task.id === selectedRootTaskId)) {
-      setSelectedRootTaskId(taskRows[0]?.task.id ?? null);
-    }
-  }, [selectedRootTaskId, taskRows]);
-
-  const selectedRootTask =
-    taskRows.find((row) => row.depth === 0 && row.task.id === selectedRootTaskId)?.task ?? null;
-  const flowGraph = buildTeamFlowGraph({
-    tasks,
-    messages: snapshot?.messages ?? [],
-    liveMessageDeltas,
-    agentStatuses: snapshot?.agentStatuses ?? [],
-    selectedTaskId: selectedRootTaskId,
-  });
-
-  const agentRoleById = Object.fromEntries(
-    (snapshot?.agentStatuses ?? []).map((agent) => [agent.agentId, agent.role]),
+  const approvals = (snapshot?.commandApprovals ?? []).filter((approval) =>
+    memberIds.includes(approval.agentId),
   );
-  const managerRole = selectedRootTask?.managerAgentId
-    ? agentRoleById[selectedRootTask.managerAgentId]
-    : undefined;
+  const teamTasks = (snapshot?.tasks ?? []).filter((task) =>
+    task.assignedAgents.some((agentId) => memberIds.includes(agentId)),
+  );
+  const connectedMembers = memberIds.filter((id) => agentStatusMap[id]).length;
+  const boundMembers = team?.members.filter((member) => member.runtimeProfileRef).length ?? 0;
+  const pendingApprovals = approvals.filter((approval) => approval.status === 'pending').length;
+  const activeSession =
+    snapshot?.session && (snapshot.session.teamId === teamId || (!snapshot.session.teamId && (snapshot.config?.teams.length ?? 0) === 1))
+      ? snapshot.session
+      : null;
 
-  const nodes = buildFlowNodes(flowGraph.nodes, (agentId) => {
-    navigate({ layer: 'agent', projectPath, teamId, agentId });
-  });
-  const edges = buildFlowEdges(flowGraph.edges);
+  async function handleApplyTeam(): Promise<void> {
+    setRuntimeBusy(true);
+    setRuntimeError(null);
 
-  const relevantTaskIds = new Set<string>();
-  if (selectedRootTaskId) {
-    relevantTaskIds.add(selectedRootTaskId);
-    tasks
-      .filter((task) => task.parentTaskId === selectedRootTaskId)
-      .forEach((task) => relevantTaskIds.add(task.id));
-  }
-  const activity = (snapshot?.messages ?? [])
-    .filter((message) => message.taskId && relevantTaskIds.has(message.taskId))
-    .sort((left, right) => right.timestamp - left.timestamp)
-    .slice(0, 10);
-
-  async function handleReviewAction(action: 'approve' | 'modify' | 'reject') {
-    if (!selectedRootTask) {
-      return;
-    }
-
-    setBusyAction(action);
-    setReviewError(null);
     try {
-      const nextSnapshot = await respondToTaskReview(
-        selectedRootTask.id,
-        action,
-        action === 'modify' ? modifyDraft.trim() : undefined,
-      );
-      setSnapshot(nextSnapshot);
-      if (action !== 'modify') {
-        setModifyDraft('');
-      }
+      setSnapshot(await applyNemoclawTeam(teamId));
     } catch (error) {
-      setReviewError(
+      setRuntimeError(
         error instanceof Error && error.message.trim()
           ? error.message
-          : 'Review action failed.',
+          : 'Failed to apply team.',
       );
     } finally {
-      setBusyAction(null);
+      setRuntimeBusy(false);
     }
+  }
+
+  async function handleSessionAction(action: 'start' | 'stop'): Promise<void> {
+    setRuntimeBusy(true);
+    setRuntimeError(null);
+
+    try {
+      const nextSnapshot = action === 'start'
+        ? await startSession(teamId)
+        : await stopSession(activeSession?.id);
+      setSnapshot(nextSnapshot);
+    } catch (error) {
+      setRuntimeError(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : `Failed to ${action} session.`,
+      );
+    } finally {
+      setRuntimeBusy(false);
+    }
+  }
+
+  async function handleApprovalAction(
+    approvalId: string,
+    action: 'approve' | 'deny',
+  ): Promise<void> {
+    setBusyApprovalId(approvalId);
+    setApprovalError(null);
+
+    try {
+      const approval = await resolveCommandApproval(approvalId, action);
+      patchSnapshot((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const existing = current.commandApprovals.filter((entry) => entry.id !== approval.id);
+        return {
+          ...current,
+          commandApprovals: [...existing, approval].sort(
+            (left, right) => left.requestedAt - right.requestedAt,
+          ),
+        };
+      });
+    } catch (error) {
+      setApprovalError(
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : 'Approval update failed.',
+      );
+    } finally {
+      setBusyApprovalId(null);
+    }
+  }
+
+  if (!team) {
+    return <div style={emptyStateStyle}>Team not found: {teamId}</div>;
   }
 
   return (
-    <div style={{ display: 'flex', flex: 1, minHeight: 0, background: 'var(--bg-base)' }}>
-      <div style={{ flex: 1, minWidth: 0, borderRight: '1px solid var(--border)' }}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          fitView
-          style={{ height: '100%', width: '100%' }}
-        >
-          <Background />
-          <Controls />
-        </ReactFlow>
+    <div
+      style={{
+        display: 'flex',
+        flex: 1,
+        minHeight: 0,
+        background: 'var(--bg-base)',
+        gap: '16px',
+        padding: '16px',
+        boxSizing: 'border-box',
+      }}
+    >
+      <div
+        style={{
+          flex: 1.2,
+          minWidth: 0,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+          overflowY: 'auto',
+        }}
+      >
+        <section style={panelStyle}>
+          <div className="panel-header">
+            <h2>{team.name}</h2>
+            <span>{team.workspaceMode}</span>
+          </div>
+          <p style={copyStyle}>
+            LocalTeam owns this team definition. Nemoclaw resolves each member binding to a local
+            or hosted model route through the managed gateway.
+          </p>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+            <button
+              className="secondary-button"
+              type="button"
+              disabled={runtimeBusy}
+              onClick={() => {
+                void handleApplyTeam();
+              }}
+            >
+              Apply Team
+            </button>
+            <button
+              className="primary-button"
+              type="button"
+              disabled={runtimeBusy}
+              onClick={() => {
+                void handleSessionAction(activeSession ? 'stop' : 'start');
+              }}
+            >
+              {activeSession ? 'Stop Session' : 'Start Session'}
+            </button>
+          </div>
+          {runtimeError && <p className="recovery-copy settings-error">{runtimeError}</p>}
+          <div style={metricsGridStyle}>
+            <Metric label="Members" value={String(team.members.length)} />
+            <Metric label="Bound profiles" value={String(boundMembers)} />
+            <Metric label="Connected" value={String(connectedMembers)} />
+            <Metric label="Pending approvals" value={String(pendingApprovals)} />
+            <Metric label="Session" value={activeSession?.status ?? 'Not started'} />
+          </div>
+        </section>
+
+        <section>
+          <div style={sectionHeaderStyle}>Team Members</div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+              gap: '12px',
+            }}
+          >
+            {team.members.map((member) => {
+              const status = resolveMemberStatus(member, agentStatusMap[member.id]);
+              return (
+                <button
+                  key={member.id}
+                  type="button"
+                  onClick={() => navigate({ layer: 'agent', projectPath, teamId, agentId: member.id })}
+                  style={{
+                    ...panelStyle,
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: '8px',
+                      marginBottom: '10px',
+                    }}
+                  >
+                    <strong style={{ fontSize: '13px' }}>{member.role}</strong>
+                    <StatusBadge status={status.status} />
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                    {member.runtimeProfileRef ?? 'No runtime profile ref'}
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' }}>
+                    <span style={chipStyle('var(--accent)')}>{status.provider}</span>
+                    <span style={chipStyle('var(--text-muted)')}>{status.model}</span>
+                    {member.canExecuteCommands && (
+                      <span style={chipStyle('var(--yellow)')}>Commands enabled</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                    {trimText(member.systemPrompt, 120)}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section style={{ ...panelStyle, minHeight: 0 }}>
+          <div className="panel-header">
+            <h3>Recent Team Activity</h3>
+            <span>{recentMessages.length} entries</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {recentMessages.length === 0 ? (
+              <div style={emptyStateStyle}>No team activity recorded yet.</div>
+            ) : (
+              recentMessages.map((message) => (
+                <div key={message.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                    {message.agentRole} • {message.type}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    {trimText(message.content, 160)}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </section>
       </div>
 
       <div
@@ -183,159 +271,147 @@ export function TeamView(): React.ReactElement {
           flexShrink: 0,
           display: 'flex',
           flexDirection: 'column',
-          gap: 12,
-          padding: 12,
-          boxSizing: 'border-box',
+          gap: '16px',
           overflowY: 'auto',
         }}
       >
-        <TaskHierarchyPanel
-          rows={taskRows}
-          selectedRootTaskId={selectedRootTaskId}
-          agentRoleById={agentRoleById}
-          onSelectRootTask={setSelectedRootTaskId}
-        />
-
-        <ManagerReviewPanel
-          task={selectedRootTask}
-          managerRole={managerRole}
-          busyAction={busyAction}
-          error={reviewError}
-          modifyDraft={modifyDraft}
-          onModifyDraftChange={setModifyDraft}
-          onApprove={() => {
-            void handleReviewAction('approve');
-          }}
-          onModify={() => {
-            void handleReviewAction('modify');
-          }}
-          onReject={() => {
-            void handleReviewAction('reject');
-          }}
-        />
-
-        <section style={{ minHeight: 0 }}>
-          <div
-            style={{
-              fontSize: 9,
-              textTransform: 'uppercase',
-              letterSpacing: '2px',
-              color: 'var(--text-muted)',
-              marginBottom: 8,
-            }}
-          >
-            Activity
+        <section style={panelStyle}>
+          <div className="panel-header">
+            <h3>Gateway Summary</h3>
+            <span>{snapshot?.sidecar.ready ? 'Online' : 'Offline'}</span>
           </div>
-          <div
-            style={{
-              border: '1px solid var(--border)',
-              background: 'var(--bg-panel)',
-              minHeight: 120,
-              maxHeight: 260,
-              overflowY: 'auto',
-            }}
-          >
-            {activity.length === 0 ? (
-              <div style={{ padding: 12, fontSize: 11, color: 'var(--text-muted)' }}>
-                No activity for the selected request yet.
-              </div>
-            ) : (
-              activity.map((message) => (
-                <div
-                  key={message.id}
-                  style={{
-                    padding: '10px 12px',
-                    borderBottom: '1px solid var(--border)',
-                  }}
-                >
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4 }}>
-                    {message.agentRole} • {message.type}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                    {message.content}
-                  </div>
-                </div>
-              ))
-            )}
+          <div style={{ display: 'grid', gap: '8px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+            <div>Team id: {team.id}</div>
+            <div>Workspace mode: {team.workspaceMode}</div>
+            <div>Session status: {activeSession?.status ?? 'Not started'}</div>
+            <div>Shared workspace: {snapshot?.projectRoot ?? 'Not loaded'}</div>
+            {snapshot?.sidecar.lastError && <div style={{ color: 'var(--red)' }}>{snapshot.sidecar.lastError}</div>}
           </div>
         </section>
+
+        <section style={panelStyle}>
+          <div className="panel-header">
+            <h3>Bindings</h3>
+            <span>{boundMembers}/{team.members.length} bound</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            {team.members.map((member) => (
+              <div key={member.id} style={{ borderBottom: '1px solid var(--border)', paddingBottom: '8px' }}>
+                <div style={{ fontSize: '11px', color: 'var(--text-primary)', marginBottom: '4px' }}>
+                  {member.role}
+                </div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  {member.runtimeProfileRef ?? 'Missing runtimeProfileRef'}
+                </div>
+                {(member.runtimeHint?.provider || member.runtimeHint?.model) && (
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    Hint: {member.runtimeHint?.provider ?? 'provider'} / {member.runtimeHint?.model ?? 'model'}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <CommandApprovalsPanel
+          approvals={approvals}
+          tasks={teamTasks}
+          selectedTaskId={null}
+          busyApprovalId={busyApprovalId}
+          error={approvalError}
+          onApprove={(approvalId) => {
+            void handleApprovalAction(approvalId, 'approve');
+          }}
+          onDeny={(approvalId) => {
+            void handleApprovalAction(approvalId, 'deny');
+          }}
+        />
       </div>
     </div>
   );
 }
 
-function buildFlowNodes(
-  nodes: Array<{ id: string; label: string; kind: 'user' | 'manager' | 'agent'; status?: AgentStatus['status'] }>,
-  onNavigate: (agentId: string) => void,
-): Node[] {
-  const userNode = nodes.find((node) => node.kind === 'user');
-  const managerNode = nodes.find((node) => node.kind === 'manager');
-  const agentNodes = nodes.filter((node) => node.kind === 'agent');
-
-  const reactNodes: Node[] = [];
-  if (userNode) {
-    reactNodes.push({
-      id: userNode.id,
-      type: 'flowNode',
-      position: { x: 40, y: 220 },
-      data: { ...userNode, onNavigate } satisfies FlowNodeData,
-    });
-  }
-  if (managerNode) {
-    reactNodes.push({
-      id: managerNode.id,
-      type: 'flowNode',
-      position: { x: 300, y: 220 },
-      data: { ...managerNode, onNavigate } satisfies FlowNodeData,
-    });
+function resolveMemberStatus(
+  member: TeamMemberConfig,
+  status?: AgentStatus,
+): AgentStatus {
+  if (status) {
+    return status;
   }
 
-  const yStart = 80;
-  const step = 140;
-  for (const [index, node] of agentNodes.entries()) {
-    reactNodes.push({
-      id: node.id,
-      type: 'flowNode',
-      position: { x: 580, y: yStart + index * step },
-      data: { ...node, onNavigate } satisfies FlowNodeData,
-    });
-  }
-
-  return reactNodes;
+  return {
+    agentId: member.id,
+    role: member.role,
+    model: member.runtimeHint?.model ?? 'Not connected',
+    provider: member.runtimeHint?.provider ?? 'nemoclaw',
+    backend: 'nemoclaw',
+    status: member.runtimeProfileRef ? 'idle' : 'unavailable',
+    hasCredentials: Boolean(member.runtimeProfileRef),
+  };
 }
 
-function buildFlowEdges(
-  edges: Array<{ id: string; source: string; target: string; label: string; phase: string; animated: boolean }>,
-): Edge[] {
-  return edges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    animated: edge.animated,
-    label: edge.label,
-    type: 'smoothstep',
-    style: {
-      stroke: getEdgeColor(edge.phase),
-      strokeWidth: 1.5,
-    },
-    labelStyle: {
-      fill: 'var(--text-muted)',
-      fontSize: 10,
-    },
-  }));
+function Metric({ label, value }: { label: string; value: string }): React.ReactElement {
+  return (
+    <div>
+      <div style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+        {label}
+      </div>
+      <div style={{ fontSize: '14px', color: 'var(--text-primary)' }}>{value}</div>
+    </div>
+  );
 }
 
-function getEdgeColor(phase: string): string {
-  switch (phase) {
-    case 'request':
-      return 'var(--accent)';
-    case 'planning':
-      return 'var(--cyan)';
-    case 'review':
-      return 'var(--yellow)';
-    case 'execution':
-      return 'var(--green)';
-    default:
-      return 'var(--border)';
-  }
+function trimText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
+}
+
+const sectionHeaderStyle: React.CSSProperties = {
+  fontSize: '9px',
+  textTransform: 'uppercase',
+  letterSpacing: '2px',
+  color: 'var(--text-muted)',
+  marginBottom: '8px',
+};
+
+const panelStyle: React.CSSProperties = {
+  background: 'var(--bg-panel)',
+  border: 'var(--border-width) solid var(--border)',
+  padding: '14px',
+  boxSizing: 'border-box',
+};
+
+const metricsGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+  gap: '12px',
+};
+
+const copyStyle: React.CSSProperties = {
+  fontSize: '11px',
+  color: 'var(--text-secondary)',
+  marginBottom: '12px',
+};
+
+const emptyStateStyle: React.CSSProperties = {
+  height: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'var(--bg-base)',
+  color: 'var(--text-muted)',
+  fontSize: '12px',
+};
+
+function chipStyle(color: string): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    padding: '2px 8px',
+    border: `1px solid ${color}`,
+    color,
+    fontSize: '10px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.8px',
+    background: 'transparent',
+  };
 }

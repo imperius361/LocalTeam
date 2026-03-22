@@ -1,43 +1,54 @@
 {
-  "team": {
-    "name": "Default LocalTeam",
-    "agents": [
-      {
-        "id": "architect",
-        "role": "Software Architect",
-        "model": "gpt-4.1-mini",
-        "provider": "openai",
-        "systemPrompt": "You are the lead architect. Drive the plan, decompose work, and keep the team aligned on scope and tradeoffs.",
-        "tools": ["read_file", "search_code", "propose_task"],
-        "allowedPaths": ["src/", "src-sidecar/", "src-tauri/", "docs/"],
-        "canExecuteCommands": false
-      },
-      {
-        "id": "implementer",
-        "role": "Implementation Engineer",
-        "model": "gpt-4.1-mini",
-        "provider": "openai",
-        "systemPrompt": "You implement the agreed change set, call out risks early, and keep the code path practical.",
-        "tools": ["read_file", "search_code", "artifact"],
-        "allowedPaths": ["src/", "src-sidecar/", "src-tauri/"],
-        "canExecuteCommands": false
-      },
-      {
-        "id": "security",
-        "role": "Security Engineer",
-        "model": "gpt-4.1-mini",
-        "provider": "openai",
-        "systemPrompt": "You review for auth, secrets, sandboxing, unsafe execution, and least-privilege defaults.",
-        "tools": ["read_file", "search_code", "objection"],
-        "allowedPaths": ["src/", "src-sidecar/", "src-tauri/", "docs/"],
-        "canExecuteCommands": false
-      }
-    ]
-  },
-  "consensus": {
-    "maxRounds": 3,
-    "requiredMajority": 0.66
-  },
+  "version": 2,
+  "defaultTeamId": "default-localteam",
+  "teams": [
+    {
+      "id": "default-localteam",
+      "name": "Default LocalTeam",
+      "workspaceMode": "shared_project",
+      "members": [
+        {
+          "id": "architect",
+          "role": "Software Architect",
+          "systemPrompt": "You are the lead architect. Drive the plan, decompose work, and keep the team aligned on scope and tradeoffs.",
+          "runtimeProfileRef": null,
+          "runtimeHint": {
+            "provider": "openai",
+            "model": "gpt-4.1-mini"
+          },
+          "tools": ["read_file", "search_code", "propose_task"],
+          "allowedPaths": ["src/", "src-sidecar/", "src-tauri/", "docs/"],
+          "canExecuteCommands": false
+        },
+        {
+          "id": "implementer",
+          "role": "Implementation Engineer",
+          "systemPrompt": "You implement the agreed change set, call out risks early, and keep the code path practical.",
+          "runtimeProfileRef": null,
+          "runtimeHint": {
+            "provider": "openai",
+            "model": "gpt-4.1-mini"
+          },
+          "tools": ["read_file", "search_code", "artifact"],
+          "allowedPaths": ["src/", "src-sidecar/", "src-tauri/"],
+          "canExecuteCommands": false
+        },
+        {
+          "id": "security",
+          "role": "Security Engineer",
+          "systemPrompt": "You review for auth, secrets, sandboxing, unsafe execution, and least-privilege defaults.",
+          "runtimeProfileRef": null,
+          "runtimeHint": {
+            "provider": "openai",
+            "model": "gpt-4.1-mini"
+          },
+          "tools": ["read_file", "search_code", "objection"],
+          "allowedPaths": ["src/", "src-sidecar/", "src-tauri/", "docs/"],
+          "canExecuteCommands": false
+        }
+      ]
+    }
+  ],
   "sandbox": {
     "defaultMode": "worktree",
     "useWorktrees": true

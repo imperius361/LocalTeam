@@ -1,23 +1,27 @@
-export type ProviderId = 'anthropic' | 'openai' | 'mock';
+export interface RuntimeHint {
+  provider?: string;
+  model?: string;
+}
 
-export interface AgentConfig {
+export interface TeamMemberConfig {
   id: string;
   role: string;
-  model: string;
-  provider: ProviderId;
   systemPrompt: string;
+  runtimeProfileRef: string | null;
+  runtimeHint?: RuntimeHint;
   tools?: string[];
   allowedPaths?: string[];
   canExecuteCommands?: boolean;
   preApprovedCommands?: string[];
 }
 
+export type AgentConfig = TeamMemberConfig;
+
 export interface ProjectConfig {
-  team: {
-    name: string;
-    agents: AgentConfig[];
-  };
-  consensus: {
+  version: 2;
+  defaultTeamId: string | null;
+  teams: TeamConfig[];
+  consensus?: {
     maxRounds: number;
     requiredMajority: number;
   };
@@ -28,6 +32,13 @@ export interface ProjectConfig {
   fileAccess: {
     denyList: string[];
   };
+}
+
+export interface TeamConfig {
+  id: string;
+  name: string;
+  workspaceMode: 'shared_project';
+  members: TeamMemberConfig[];
 }
 
 export interface AgentMessage {
@@ -105,7 +116,8 @@ export interface AgentStatus {
   agentId: string;
   role: string;
   model: string;
-  provider: ProviderId;
+  provider: string;
+  backend: 'nemoclaw';
   status:
     | 'idle'
     | 'thinking'
@@ -114,6 +126,43 @@ export interface AgentStatus {
     | 'unavailable';
   hasCredentials: boolean;
   lastError?: string;
+}
+
+export interface RuntimeProfileSummary {
+  id: string;
+  label: string;
+  provider: string;
+  model: string;
+  availability: 'ready' | 'missing';
+}
+
+export interface NemoclawGatewayStatus {
+  ready: boolean;
+  onboardingCompleted: boolean;
+  profileCount: number;
+  workspaceRoot: string | null;
+  lastError?: string;
+}
+
+export interface NemoclawSessionSummary {
+  id: string;
+  teamId: string;
+  title: string;
+  status: 'running' | 'stopped';
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NemoclawApprovalSummary {
+  id: string;
+  sessionId: string;
+  summary: string;
+  status: 'pending' | 'approved' | 'denied';
+  requestedAt: number;
+  updatedAt: number;
+  agentId?: string;
+  agentRole?: string;
+  command?: string;
 }
 
 export interface ConsensusPosition {
@@ -135,13 +184,14 @@ export interface SessionState {
   id: string;
   projectRoot: string;
   projectName: string;
+  teamId?: string;
   createdAt: number;
   updatedAt: number;
   status: 'idle' | 'running' | 'awaiting_user';
 }
 
 export interface ProviderCredentialStatus {
-  provider: 'anthropic' | 'openai';
+  provider: string;
   hasKey: boolean;
   syncedAt?: number;
 }
@@ -151,7 +201,7 @@ export interface TemplateSummary {
   name: string;
   description: string;
   path: string;
-  providers: ProviderId[];
+  runtimeProfiles: string[];
 }
 
 export interface MessageStreamDelta {
@@ -220,6 +270,11 @@ export interface ProjectSnapshot {
   credentials: ProviderCredentialStatus[];
   templates: TemplateSummary[];
   commandApprovals: CommandApproval[];
+  gateway?: NemoclawGatewayStatus;
+  runtimeProfiles?: RuntimeProfileSummary[];
+  sessions?: NemoclawSessionSummary[];
+  approvals?: NemoclawApprovalSummary[];
+  activeTeamId?: string | null;
   sidecar: {
     ready: boolean;
     version: string;
@@ -237,7 +292,7 @@ export interface SidecarNotification {
 
 export interface RecentProject {
   path: string;          // absolute path to directory containing localteam.json
-  name: string;          // from ProjectConfig.team.name
+  name: string;          // from ProjectConfig.defaultTeamId or first team name
   lastOpenedAt: number;  // unix ms timestamp
 }
 
